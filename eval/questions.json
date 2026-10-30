@@ -1,0 +1,542 @@
+[
+  {
+    "id": "fastapi-01",
+    "question": "How does FastAPI assemble the OpenAPI schema from the application's registered routes?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/openapi/utils.py"],
+    "expected_symbols": ["get_openapi"],
+    "expected_citations": ["fastapi/openapi/utils.py:467-558"]
+  },
+  {
+    "id": "fastapi-02",
+    "question": "How are OpenAPI operation ids generated when a route does not provide one?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/openapi/utils.py"],
+    "expected_symbols": ["generate_operation_id"],
+    "expected_citations": ["fastapi/openapi/utils.py:203-215"]
+  },
+  {
+    "id": "fastapi-03",
+    "question": "How does FastAPI convert Pydantic models and datetimes into JSON-safe values?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/encoders.py"],
+    "expected_symbols": ["jsonable_encoder"],
+    "expected_citations": ["fastapi/encoders.py:109-351"]
+  },
+  {
+    "id": "fastapi-04",
+    "question": "How does FastAPI resolve and cache dependencies for a single request?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/dependencies/utils.py"],
+    "expected_symbols": ["solve_dependencies"],
+    "expected_citations": ["fastapi/dependencies/utils.py:607-730"]
+  },
+  {
+    "id": "fastapi-05",
+    "question": "How is a callable endpoint turned into a Dependant for dependency injection?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/dependencies/utils.py"],
+    "expected_symbols": ["get_dependant"],
+    "expected_citations": ["fastapi/dependencies/utils.py:277-328"]
+  },
+  {
+    "id": "fastapi-06",
+    "question": "How does FastAPI classify a function parameter as a query, path, body, or dependency?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/dependencies/utils.py"],
+    "expected_symbols": ["analyze_param"],
+    "expected_citations": ["fastapi/dependencies/utils.py:362-546"]
+  },
+  {
+    "id": "fastapi-07",
+    "question": "How does APIRouter register a new HTTP route with its methods and endpoint?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/routing.py"],
+    "expected_symbols": ["APIRouter.add_api_route"],
+    "expected_citations": ["fastapi/routing.py:959-1039"]
+  },
+  {
+    "id": "fastapi-08",
+    "question": "What builds the ASGI request handler that validates input and calls the endpoint?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/routing.py"],
+    "expected_symbols": ["get_request_handler"],
+    "expected_citations": ["fastapi/routing.py:293-436"]
+  },
+  {
+    "id": "fastapi-09",
+    "question": "How does FastAPI validate and serialize the value returned by an endpoint?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/routing.py"],
+    "expected_symbols": ["serialize_response"],
+    "expected_citations": ["fastapi/routing.py:219-277"]
+  },
+  {
+    "id": "fastapi-10",
+    "question": "Where is an HTTPException converted into a JSON error response?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/exception_handlers.py"],
+    "expected_symbols": ["http_exception_handler"],
+    "expected_citations": ["fastapi/exception_handlers.py:11-17"]
+  },
+  {
+    "id": "fastapi-11",
+    "question": "Where are request validation errors converted into a 422 response?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/exception_handlers.py"],
+    "expected_symbols": ["request_validation_exception_handler"],
+    "expected_citations": ["fastapi/exception_handlers.py:20-26"]
+  },
+  {
+    "id": "fastapi-12",
+    "question": "How does OAuth2PasswordBearer extract the bearer token from the Authorization header?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/security/oauth2.py"],
+    "expected_symbols": ["OAuth2PasswordBearer.__call__"],
+    "expected_citations": ["fastapi/security/oauth2.py:488-500"]
+  },
+  {
+    "id": "fastapi-13",
+    "question": "How does HTTPBearer validate the authorization scheme and return credentials?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/security/http.py"],
+    "expected_symbols": ["HTTPBearer.__call__"],
+    "expected_citations": ["fastapi/security/http.py:301-321"]
+  },
+  {
+    "id": "fastapi-14",
+    "question": "How does APIKeyHeader read an API key from a request header?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/security/api_key.py"],
+    "expected_symbols": ["APIKeyHeader.__call__"],
+    "expected_citations": ["fastapi/security/api_key.py:198-200"]
+  },
+  {
+    "id": "fastapi-15",
+    "question": "How are background tasks queued after a response is sent?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/background.py"],
+    "expected_symbols": ["BackgroundTasks.add_task"],
+    "expected_citations": ["fastapi/background.py:38-59"]
+  },
+  {
+    "id": "fastapi-16",
+    "question": "How does UploadFile.read pull bytes from the spooled temporary file?",
+    "repo": "fastapi",
+    "answerable": true,
+    "expected_files": ["fastapi/datastructures.py"],
+    "expected_symbols": ["UploadFile.read"],
+    "expected_citations": ["fastapi/datastructures.py:93-109"]
+  },
+  {
+    "id": "fastapi-17",
+    "question": "Where is the Kubernetes ingress sharding logic implemented?",
+    "repo": "fastapi",
+    "answerable": false,
+    "expected_files": [],
+    "expected_symbols": [],
+    "expected_citations": []
+  },
+  {
+    "id": "fastapi-18",
+    "question": "Where is the Redis cluster failover handler implemented?",
+    "repo": "fastapi",
+    "answerable": false,
+    "expected_files": [],
+    "expected_symbols": [],
+    "expected_citations": []
+  },
+  {
+    "id": "fastapi-19",
+    "question": "Where is the gRPC streaming interceptor configured?",
+    "repo": "fastapi",
+    "answerable": false,
+    "expected_files": [],
+    "expected_symbols": [],
+    "expected_citations": []
+  },
+  {
+    "id": "fastapi-20",
+    "question": "Where is the GraphQL subscription resolver defined?",
+    "repo": "fastapi",
+    "answerable": false,
+    "expected_files": [],
+    "expected_symbols": [],
+    "expected_citations": []
+  },
+  {
+    "id": "flask-01",
+    "question": "How does Flask dispatch a matched URL rule to its view function?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/app.py"],
+    "expected_symbols": ["Flask.dispatch_request"],
+    "expected_citations": ["src/flask/app.py:879-902"]
+  },
+  {
+    "id": "flask-02",
+    "question": "What runs before and after request hooks around a dispatched request?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/app.py"],
+    "expected_symbols": ["Flask.full_dispatch_request"],
+    "expected_citations": ["src/flask/app.py:904-920"]
+  },
+  {
+    "id": "flask-03",
+    "question": "How does Flask turn an HTTPException into an error response?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/app.py"],
+    "expected_symbols": ["Flask.handle_http_exception"],
+    "expected_citations": ["src/flask/app.py:744-777"]
+  },
+  {
+    "id": "flask-04",
+    "question": "How does Flask coerce view return values into a Response object?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/app.py"],
+    "expected_symbols": ["Flask.make_response"],
+    "expected_citations": ["src/flask/app.py:1129-1269"]
+  },
+  {
+    "id": "flask-05",
+    "question": "How does Flask build a URL for an endpoint and its parameters?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/app.py"],
+    "expected_symbols": ["Flask.url_for"],
+    "expected_citations": ["src/flask/app.py:1003-1127"]
+  },
+  {
+    "id": "flask-06",
+    "question": "How does the Flask WSGI application create request contexts and call the handler?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/app.py"],
+    "expected_symbols": ["Flask.wsgi_app"],
+    "expected_citations": ["src/flask/app.py:1479-1527"]
+  },
+  {
+    "id": "flask-07",
+    "question": "How does Flask.run start the development server?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/app.py"],
+    "expected_symbols": ["Flask.run"],
+    "expected_citations": ["src/flask/app.py:546-667"]
+  },
+  {
+    "id": "flask-08",
+    "question": "How does the application register a URL rule and choose an endpoint name?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/sansio/app.py"],
+    "expected_symbols": ["App.add_url_rule"],
+    "expected_citations": ["src/flask/sansio/app.py:604-661"]
+  },
+  {
+    "id": "flask-09",
+    "question": "How does a Blueprint register its deferred functions on an application?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/sansio/blueprints.py"],
+    "expected_symbols": ["Blueprint.register"],
+    "expected_citations": ["src/flask/sansio/blueprints.py:273-377"]
+  },
+  {
+    "id": "flask-10",
+    "question": "How does a Blueprint add a URL rule during deferred setup?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/sansio/blueprints.py"],
+    "expected_symbols": ["Blueprint.add_url_rule"],
+    "expected_citations": ["src/flask/sansio/blueprints.py:412-441"]
+  },
+  {
+    "id": "flask-11",
+    "question": "How is a signed session cookie opened and deserialized?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/sessions.py"],
+    "expected_symbols": ["SecureCookieSessionInterface.open_session"],
+    "expected_citations": ["src/flask/sessions.py:323-335"]
+  },
+  {
+    "id": "flask-12",
+    "question": "How is session data serialized and written back to a cookie?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/sessions.py"],
+    "expected_symbols": ["SecureCookieSessionInterface.save_session"],
+    "expected_citations": ["src/flask/sessions.py:337-385"]
+  },
+  {
+    "id": "flask-13",
+    "question": "How does Flask load configuration from environment variables with a prefix?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/config.py"],
+    "expected_symbols": ["Config.from_prefixed_env"],
+    "expected_citations": ["src/flask/config.py:126-185"]
+  },
+  {
+    "id": "flask-14",
+    "question": "How does Flask load configuration from a Python file?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/config.py"],
+    "expected_symbols": ["Config.from_pyfile"],
+    "expected_citations": ["src/flask/config.py:187-216"]
+  },
+  {
+    "id": "flask-15",
+    "question": "How does jsonify build a JSON response from Python objects?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/json/__init__.py"],
+    "expected_symbols": ["jsonify"],
+    "expected_citations": ["src/flask/json/__init__.py:138-170"]
+  },
+  {
+    "id": "flask-16",
+    "question": "How does render_template build a template context and render a Jinja template?",
+    "repo": "flask",
+    "answerable": true,
+    "expected_files": ["src/flask/templating.py"],
+    "expected_symbols": ["render_template"],
+    "expected_citations": ["src/flask/templating.py:139-151"]
+  },
+  {
+    "id": "flask-17",
+    "question": "Where is the Kubernetes ingress sharding logic implemented?",
+    "repo": "flask",
+    "answerable": false,
+    "expected_files": [],
+    "expected_symbols": [],
+    "expected_citations": []
+  },
+  {
+    "id": "flask-18",
+    "question": "Where is the S3 multipart upload retry policy implemented?",
+    "repo": "flask",
+    "answerable": false,
+    "expected_files": [],
+    "expected_symbols": [],
+    "expected_citations": []
+  },
+  {
+    "id": "flask-19",
+    "question": "Where is the Kafka consumer group rebalance handler implemented?",
+    "repo": "flask",
+    "answerable": false,
+    "expected_files": [],
+    "expected_symbols": [],
+    "expected_citations": []
+  },
+  {
+    "id": "flask-20",
+    "question": "Where is the GraphQL subscription resolver defined?",
+    "repo": "flask",
+    "answerable": false,
+    "expected_files": [],
+    "expected_symbols": [],
+    "expected_citations": []
+  },
+  {
+    "id": "atlas-01",
+    "question": "How does the walker skip directories and files that match gitignore rules?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/walker.py", "src/atlas/ignore.py"],
+    "expected_symbols": ["scan", "IgnoreRules.is_ignored"],
+    "expected_citations": ["src/atlas/walker.py:121-175", "src/atlas/ignore.py:137-151"]
+  },
+  {
+    "id": "atlas-02",
+    "question": "How is the manifest built from a scan and the discovered entry points?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/manifest.py"],
+    "expected_symbols": ["build_manifest"],
+    "expected_citations": ["src/atlas/manifest.py:19-56"]
+  },
+  {
+    "id": "atlas-03",
+    "question": "How does Atlas decide that a manifest is missing or unusable before re-indexing?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/manifest.py"],
+    "expected_symbols": ["read_manifest"],
+    "expected_citations": ["src/atlas/manifest.py:69-94"]
+  },
+  {
+    "id": "atlas-04",
+    "question": "How does Atlas choose a parser for a file based on its detected language?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/parse.py"],
+    "expected_symbols": ["parse_file"],
+    "expected_citations": ["src/atlas/parse.py:28-44"]
+  },
+  {
+    "id": "atlas-05",
+    "question": "How does the Python parser collect symbols, imports, and calls with ast?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/parser_python.py"],
+    "expected_symbols": ["parse_python"],
+    "expected_citations": ["src/atlas/parser_python.py:147-167"]
+  },
+  {
+    "id": "atlas-06",
+    "question": "How are call edges resolved against imports and unique symbol names?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/graph.py"],
+    "expected_symbols": ["_resolve_edges"],
+    "expected_citations": ["src/atlas/graph.py:342-451"]
+  },
+  {
+    "id": "atlas-07",
+    "question": "How does an incremental index replace rows for changed files?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/graph.py"],
+    "expected_symbols": ["_apply_incremental"],
+    "expected_citations": ["src/atlas/graph.py:600-695"]
+  },
+  {
+    "id": "atlas-08",
+    "question": "How does Atlas detect that the graph and manifest disagree before an incremental update?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/graph.py"],
+    "expected_symbols": ["_graph_problem"],
+    "expected_citations": ["src/atlas/graph.py:580-597"]
+  },
+  {
+    "id": "atlas-09",
+    "question": "How does reciprocal rank fusion combine the symbol, FTS, and graph rankings?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/retrieval.py"],
+    "expected_symbols": ["fuse"],
+    "expected_citations": ["src/atlas/retrieval.py:309-328"]
+  },
+  {
+    "id": "atlas-10",
+    "question": "How does FTS5 search score chunks with BM25?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/retrieval.py"],
+    "expected_symbols": ["fts_search"],
+    "expected_citations": ["src/atlas/retrieval.py:198-213"]
+  },
+  {
+    "id": "atlas-11",
+    "question": "How does one-hop graph expansion find callers, callees, and importers?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/retrieval.py"],
+    "expected_symbols": ["expand"],
+    "expected_citations": ["src/atlas/retrieval.py:220-306"]
+  },
+  {
+    "id": "atlas-12",
+    "question": "How are model citations checked against files and the retrieved chunks?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/answer.py"],
+    "expected_symbols": ["validate_citations"],
+    "expected_citations": ["src/atlas/answer.py:113-155"]
+  },
+  {
+    "id": "atlas-13",
+    "question": "Where does Atlas return the refusal when retrieval finds nothing?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/answer.py"],
+    "expected_symbols": ["answer"],
+    "expected_citations": ["src/atlas/answer.py:158-203"]
+  },
+  {
+    "id": "atlas-14",
+    "question": "How does Atlas discover a local Ollama or OpenAI-compatible model?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/narrate.py"],
+    "expected_symbols": ["detect_model"],
+    "expected_citations": ["src/atlas/narrate.py:76-99"]
+  },
+  {
+    "id": "atlas-15",
+    "question": "How does the web app expose the meta, file, map, and ask routes?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/web.py"],
+    "expected_symbols": ["create_app"],
+    "expected_citations": ["src/atlas/web.py:130-290"]
+  },
+  {
+    "id": "atlas-16",
+    "question": "How does Atlas compare the working tree with the indexed graph for diff?",
+    "repo": "atlas",
+    "answerable": true,
+    "expected_files": ["src/atlas/diff.py"],
+    "expected_symbols": ["compute_diff"],
+    "expected_citations": ["src/atlas/diff.py:132-244"]
+  },
+  {
+    "id": "atlas-17",
+    "question": "Where is the vector embedding index migration defined?",
+    "repo": "atlas",
+    "answerable": false,
+    "expected_files": [],
+    "expected_symbols": [],
+    "expected_citations": []
+  },
+  {
+    "id": "atlas-18",
+    "question": "Where is the hosted multi-tenant billing service implemented?",
+    "repo": "atlas",
+    "answerable": false,
+    "expected_files": [],
+    "expected_symbols": [],
+    "expected_citations": []
+  },
+  {
+    "id": "atlas-19",
+    "question": "Where is the Kubernetes ingress sharding logic implemented?",
+    "repo": "atlas",
+    "answerable": false,
+    "expected_files": [],
+    "expected_symbols": [],
+    "expected_citations": []
+  },
+  {
+    "id": "atlas-20",
+    "question": "Where does Atlas negotiate WebSocket compression for browser clients?",
+    "repo": "atlas",
+    "answerable": false,
+    "expected_files": [],
+    "expected_symbols": [],
+    "expected_citations": []
+  }
+]

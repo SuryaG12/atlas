@@ -8,8 +8,9 @@ The graph does the finding. The LLM only narrates what retrieval already found,
 and every quote it produces is validated against the index before it is shown.
 No embeddings, no cloud, no account. Code stays on your machine.
 
-**Status: M0-M4 complete.** 86 tests passing. See [SPEC.md](SPEC.md) for the
-design and [Roadmap](#roadmap) for what comes next.
+**Status: M0-M5 complete.** 102 tests passing. See [SPEC.md](SPEC.md) for the
+design, [EVAL.md](EVAL.md) for the measured evaluation, and
+[Roadmap](#roadmap) for what comes next.
 
 ## How it works
 
@@ -71,6 +72,9 @@ atlas web                          # serve the UI and open a browser
 atlas web --port 8000              # choose a port
 atlas web --no-browser             # print the URL only
 atlas web --path ../other-repo     # serve a different indexed repo
+
+atlas eval --questions eval/questions.json --out EVAL.md  # run the eval set
+atlas eval --questions eval/questions.json --json         # machine-readable
 ```
 
 `atlas ask` uses a **local model only**. It looks for Ollama at
@@ -226,19 +230,71 @@ web UI are unchanged.
   files, diff text/JSON parity, clean diffs, incremental-vs-`--full` snapshot
   equality, corrupt/missing fallback, and web parity after an incremental run.
 
+## What M5 does
+
+M5 measures the existing pipeline. It does not change retrieval, citation
+validation, the graph, or the web UI.
+
+- **`atlas eval`** - runs the exact M2 `retrieve` path (`top_k=8`,
+  `budget=6000`, `min_score=0.02`, RRF fusion) over a JSON question set and
+  scores the chunks it returns. `--json` emits the same data; `--out` writes a
+  Markdown or JSON report.
+- **Verified ground truth** - every expected file, symbol, and
+  `path:start-end` citation is checked against the index before scoring. A
+  question whose ground truth cannot be verified aborts the run; it is never
+  scored or guessed at.
+- **Question set** - 60 questions, 20 per repo, with 16 answerable and 4
+  unanswerable in each. Repos are pinned to FastAPI `0.119.1`, Flask `3.1.3`,
+  and Atlas at M4. The clones live in `eval/repos/` and are gitignored;
+  `eval/repos.json` records the commits.
+- **Metrics** - recall@5 (an expected file or symbol in the top 5 chunks),
+  refusal accuracy under the actual M2 rule, and, only when a local model is
+  present, citation validity and claim-level faithfulness by citation
+  containment. With no model, narration is reported as "not evaluated", never
+  as a retrieval score.
+- **Reporting** - [EVAL.md](EVAL.md) is generated from the run: pinned repos,
+  question counts, per-repo and overall metrics, every retrieval miss, every
+  refusal case, and the paraphrase diagnostic.
+
 ## Numbers
 
-Measured on this repository with `atlas index .` after the M4 files were added:
+Measured on this repository with `atlas index .` after the M5 files were added:
 
 | Files | Lines | Symbols | Chunks | Edges | Internal resolved |
 |---|---|---|---|---|---|
-| 33 | 8,345 | 341 | 341 | 2,510 | 97.0% |
+| 38 | 10,768 | 406 | 406 | 3,043 | 96.9% |
 
 The index is local and disposable: `.atlas/` is gitignored. A full rebuild takes
 well under a second on a repo this size, and a second index with no changes
-parses 0 files (33 skipped) in about 0.01s. Non-Python languages need Python 3.14
+parses 0 files (38 skipped) in about 0.01s. Non-Python languages need Python 3.14
 (or another version with tree-sitter wheels); otherwise they are walked but not
 parsed.
+
+### Retrieval eval
+
+Measured on the M5 question set: 60 questions, 48 answerable and 12
+unanswerable, across three pinned repositories.
+
+| Repo | Version | Recall@5 | Refusal accuracy |
+|---|---|---:|---:|
+| FastAPI | 0.119.1 | 0.812 (13/16) | 0.500 (2/4) |
+| Flask | 3.1.3 | 0.875 (14/16) | 0.500 (2/4) |
+| Atlas | M4 | 0.938 (15/16) | 0.250 (1/4) |
+| **Overall** | | **0.875 (42/48)** | **0.417 (5/12)** |
+
+Citation validity and faithfulness are **not evaluated**: no local model was
+configured, so there were no narrated answers to score. They are not reported as
+retrieval numbers.
+
+The refusal result is the weak one. The M2 threshold accepts any question whose
+best fused score reaches `0.02`, and incidental symbol/FTS matches often clear
+that bar on genuinely absent questions. The 7 false positives are listed, with
+their top chunks, in [EVAL.md](EVAL.md), alongside the 6 retrieval misses.
+
+The paraphrase diagnostic compares questions containing an expected symbol name
+with questions describing the same code in different words: 5/5 for exact-name
+questions and 37/43 for paraphrased questions, a `+0.140` gap. The exact-name
+group is small, so treat the gap as directional. No embeddings were added in M5.
 
 ## Dev
 
@@ -246,9 +302,11 @@ parsed.
 pytest -q
 ```
 
-The suite covers M0-M4: the walker and manifest, Python and tree-sitter parsing,
+The suite covers M0-M5: the walker and manifest, Python and tree-sitter parsing,
 graph resolution, incremental indexing and fallbacks, diff text/JSON parity,
-retrieval and refusal, citation validation, the CLI, and the web endpoints.
+retrieval and refusal, citation validation, the CLI, the web endpoints, and the
+eval harness (synthetic metrics, ground-truth rejection, determinism, refusal,
+and no-model narration handling).
 
 ## Roadmap
 
@@ -259,7 +317,7 @@ retrieval and refusal, citation validation, the CLI, and the web endpoints.
 | M2 | Hybrid retrieval + cited `atlas ask` | done |
 | M3 | Local read-only web UI | done |
 | M4 | Diff mode + incremental indexing | done |
-| M5 | Eval harness + public benchmark | next |
+| M5 | Eval harness + public benchmark | done |
 
 ## License
 

@@ -14,6 +14,14 @@ from . import __version__
 from .answer import REFUSAL, answer
 from .diff import NoIndexError, compute_diff, render_text as render_diff, to_dict as diff_to_dict
 from .entrypoints import find_entrypoints
+from .eval import (
+    EvalError,
+    load_questions,
+    render_json as render_eval_json,
+    render_markdown as render_eval_markdown,
+    resolve_repos,
+    run_eval,
+)
 from .graph import (
     SCHEMA_VERSION,
     graph_schema,
@@ -428,6 +436,65 @@ def diff_cmd(
         typer.echo(jsonlib.dumps(diff_to_dict(result), indent=2))
         return
     typer.echo(render_diff(result))
+
+
+@app.command("eval")
+def eval_cmd(
+    questions: Annotated[
+        Path,
+        typer.Option("--questions", help="JSON file with the evaluation questions."),
+    ],
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit machine-readable JSON.")
+    ] = False,
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Write the report to a file (.md or .json)."),
+    ] = None,
+    repos: Annotated[
+        Path | None,
+        typer.Option(
+            "--repos",
+            help="JSON repo map. Defaults to repos.json next to the questions file.",
+        ),
+    ] = None,
+    no_narration: Annotated[
+        bool,
+        typer.Option(
+            "--no-narration",
+            help="Skip narration even when a local model is reachable.",
+        ),
+    ] = False,
+) -> None:
+    """Score retrieval (and optionally narration) on a question set."""
+    if repos is not None:
+        repos_path = repos
+    elif (questions.parent / "repos.json").is_file():
+        repos_path = questions.parent / "repos.json"
+    else:
+        repos_path = None
+
+    model = None if no_narration else detect_model()
+
+    try:
+        loaded = load_questions(questions)
+        specs = resolve_repos(loaded, repos_path)
+        report = run_eval(loaded, specs, model=model)
+    except EvalError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
+
+    as_json = as_json or (out is not None and out.suffix.lower() == ".json")
+    text = render_eval_json(report) if as_json else render_eval_markdown(report)
+
+    if out is not None:
+        target = out.expanduser()
+        if target.parent != Path(""):
+            target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8", newline="\n")
+        typer.echo(f"Wrote {target}")
+        return
+    typer.echo(text, nl=False)
 
 
 @app.command("web")

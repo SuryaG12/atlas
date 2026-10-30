@@ -1,6 +1,9 @@
 # generated index - never commit
 .atlas/
 
+# eval workspace clones - never commit
+eval/repos/
+
 # environments
 .venv/
 venv/
