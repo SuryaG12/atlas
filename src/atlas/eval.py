@@ -11,6 +11,7 @@ import json
 import re
 import sqlite3
 from collections import OrderedDict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,12 @@ BUDGET = 6000
 MIN_SCORE = 0.02
 RECALL_N = 5
 CLAIM_MIN_WORDS = 1
+
+# Candidate refusal thresholds examined before changing the M2 default.
+SWEEP_THRESHOLDS = (0.0200, 0.0300, 0.0400, 0.0500, 0.0750, 0.1000)
+# A new default is only acceptable when it clears both floors.
+SWEEP_TARGET_RECALL = 0.850
+SWEEP_TARGET_REFUSAL = 0.750
 
 REQUIRED_FIELDS = (
     "id",
@@ -646,6 +653,7 @@ class EvalReport:
     paraphrase: dict
     narration: dict
     verified_questions: int
+    sweep: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -655,6 +663,7 @@ class EvalReport:
             "paraphrase": self.paraphrase,
             "narration": self.narration,
             "verified_questions": self.verified_questions,
+            "sweep": list(self.sweep),
         }
 
 
@@ -757,14 +766,34 @@ def run_eval(
     top_k: int = TOP_K,
     budget: int = BUDGET,
     min_score: float = MIN_SCORE,
+    sweep: Sequence[float] | None = None,
 ) -> EvalReport:
     """Run retrieval for every question, then optional narration.
 
     Ground truth is verified per repo before any question is scored.  If one
     entry cannot be verified, the run fails rather than reporting a fake score.
+
+    ``sweep`` re-runs the exact M2 ``retrieve`` for every question at each
+    candidate ``min_score`` and records recall and refusal accuracy for the
+    shipped gate (exact symbol match bypasses the score floor) and for a plain
+    score cut with no bypass.
     """
     if not questions:
         raise EvalError("No questions to evaluate")
+
+    sweep_thresholds = [float(value) for value in (sweep or [])]
+    sweep_counts: dict[float, dict[str, int]] = {
+        threshold: {
+            "answerable": 0,
+            "recall_hits": 0,
+            "answerable_refusals": 0,
+            "score_only_recall_hits": 0,
+            "unanswerable": 0,
+            "refusals_correct": 0,
+            "score_only_refusals_correct": 0,
+        }
+        for threshold in sweep_thresholds
+    }
 
     grouped: OrderedDict[str, list[Question]] = OrderedDict()
     for question in questions:
@@ -871,6 +900,37 @@ def run_eval(
                         narration=narration,
                     )
                 )
+
+                for threshold in sweep_thresholds:
+                    tally = sweep_counts[threshold]
+                    swept = retrieve(
+                        conn,
+                        question.question,
+                        top_k=top_k,
+                        budget=budget,
+                        min_score=threshold,
+                    )
+                    swept_score = score_retrieval(question, swept)
+                    if question.answerable:
+                        tally["answerable"] += 1
+                        if not swept.refused and swept_score["recall_at_5"]:
+                            tally["recall_hits"] += 1
+                        if swept.refused:
+                            tally["answerable_refusals"] += 1
+                        # A plain score cut has no exact-symbol bypass: the same
+                        # chunks are still present when the bypass accepted the
+                        # question, so recall is scored from the same result.
+                        if (
+                            swept.best_score >= threshold
+                            and swept_score["recall_at_5"]
+                        ):
+                            tally["score_only_recall_hits"] += 1
+                    else:
+                        tally["unanswerable"] += 1
+                        if swept.refused:
+                            tally["refusals_correct"] += 1
+                        if swept.best_score < threshold:
+                            tally["score_only_refusals_correct"] += 1
         finally:
             conn.close()
 
@@ -921,6 +981,59 @@ def run_eval(
         },
     }
 
+    sweep_payload = []
+    for threshold in sweep_thresholds:
+        tally = sweep_counts[threshold]
+        answerable_total = tally["answerable"]
+        unanswerable_total = tally["unanswerable"]
+        sweep_payload.append(
+            {
+                "threshold": threshold,
+                "answerable": answerable_total,
+                "recall_hits": tally["recall_hits"],
+                "recall_at_5": (
+                    round(tally["recall_hits"] / answerable_total, 6)
+                    if answerable_total
+                    else None
+                ),
+                "answerable_refusals": tally["answerable_refusals"],
+                "unanswerable": unanswerable_total,
+                "refusals_correct": tally["refusals_correct"],
+                "refusal_accuracy": (
+                    round(tally["refusals_correct"] / unanswerable_total, 6)
+                    if unanswerable_total
+                    else None
+                ),
+                "score_only_recall_hits": tally["score_only_recall_hits"],
+                "score_only_recall_at_5": (
+                    round(
+                        tally["score_only_recall_hits"] / answerable_total, 6
+                    )
+                    if answerable_total
+                    else None
+                ),
+                "score_only_refusals_correct": tally[
+                    "score_only_refusals_correct"
+                ],
+                "score_only_refusal_accuracy": (
+                    round(
+                        tally["score_only_refusals_correct"] / unanswerable_total,
+                        6,
+                    )
+                    if unanswerable_total
+                    else None
+                ),
+                "meets_targets": bool(
+                    answerable_total
+                    and unanswerable_total
+                    and tally["recall_hits"] / answerable_total
+                    >= SWEEP_TARGET_RECALL
+                    and tally["refusals_correct"] / unanswerable_total
+                    >= SWEEP_TARGET_REFUSAL
+                ),
+            }
+        )
+
     return EvalReport(
         repos=repo_payload,
         outcomes=outcomes,
@@ -930,6 +1043,7 @@ def run_eval(
         verified_questions=sum(
             1 for outcome in outcomes if outcome.answerable
         ),
+        sweep=sweep_payload,
     )
 
 
@@ -1039,6 +1153,67 @@ def render_markdown(report: EvalReport) -> str:
             "Every unanswerable question was refused under the M2 rule."
         )
     lines.append("")
+
+    if report.sweep:
+        lines.append("## Threshold sweep")
+        lines.append("")
+        lines.append(
+            "Every row re-runs the exact M2 `retrieve` for all questions at that"
+            " `min_score`. The *exact gate* is the shipped rule: refuse when the"
+            " best fused score is below the threshold and no exact symbol match"
+            " exists. The *score only* column drops the exact-symbol bypass."
+        )
+        lines.append("")
+        lines.append(
+            "| `min_score` | Recall@5 (exact gate) | Refusal (exact gate) |"
+            " Recall@5 (score only) | Refusal (score only) |"
+        )
+        lines.append("| ---: | ---: | ---: | ---: | ---: |")
+        for row in report.sweep:
+            lines.append(
+                f"| {row['threshold']:.4f} |"
+                f" {_fmt(row['recall_at_5'], row['recall_hits'], row['answerable'])} |"
+                f" {_fmt(row['refusal_accuracy'], row['refusals_correct'], row['unanswerable'])} |"
+                f" {_fmt(row['score_only_recall_at_5'], row['score_only_recall_hits'], row['answerable'])} |"
+                f" {_fmt(row['score_only_refusal_accuracy'], row['score_only_refusals_correct'], row['unanswerable'])} |"
+            )
+        lines.append("")
+        viable = [row for row in report.sweep if row["meets_targets"]]
+        if viable:
+            chosen = ", ".join(
+                f"`{row['threshold']:.4f}`" for row in viable
+            )
+            lines.append(
+                f"Thresholds meeting both floors (`recall@5 >="
+                f" {SWEEP_TARGET_RECALL:.3f}`, `refusal >="
+                f" {SWEEP_TARGET_REFUSAL:.3f}`): {chosen}."
+            )
+        else:
+            lines.append(
+                f"No tested threshold meets both floors (`recall@5 >="
+                f" {SWEEP_TARGET_RECALL:.3f}`, `refusal >="
+                f" {SWEEP_TARGET_REFUSAL:.3f}`). The shipped default stays at"
+                f" `{MIN_SCORE:.2f}` rather than trading away correct answers for"
+                " refusals."
+            )
+        at_floor = [
+            row
+            for row in report.sweep
+            if (row["refusal_accuracy"] or 0) >= SWEEP_TARGET_REFUSAL
+        ]
+        if at_floor:
+            gate_best = max(row["recall_at_5"] or 0 for row in at_floor)
+            score_best = max(
+                row["score_only_recall_at_5"] or 0 for row in at_floor
+            )
+            lines.append(
+                "On the rows that reach the refusal floor, the exact-match gate"
+                f" keeps recall at {gate_best:.3f}; a plain score cut falls to"
+                f" {score_best:.3f}. The bypass only changes refusal where its"
+                " rescued matches sit below the threshold, and by then the recall"
+                " is already gone."
+            )
+        lines.append("")
 
     lines.append("## Repositories")
     lines.append("")

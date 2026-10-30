@@ -8,7 +8,7 @@ The graph does the finding. The LLM only narrates what retrieval already found,
 and every quote it produces is validated against the index before it is shown.
 No embeddings, no cloud, no account. Code stays on your machine.
 
-**Status: M0-M5 complete.** 102 tests passing. See [SPEC.md](SPEC.md) for the
+**Status: M0-M5 complete.** 108 tests passing. See [SPEC.md](SPEC.md) for the
 design, [EVAL.md](EVAL.md) for the measured evaluation, and
 [Roadmap](#roadmap) for what comes next.
 
@@ -238,7 +238,8 @@ validation, the graph, or the web UI.
 - **`atlas eval`** - runs the exact M2 `retrieve` path (`top_k=8`,
   `budget=6000`, `min_score=0.02`, RRF fusion) over a JSON question set and
   scores the chunks it returns. `--json` emits the same data; `--out` writes a
-  Markdown or JSON report.
+  Markdown or JSON report; `--sweep` re-runs retrieval at candidate refusal
+  thresholds and reports the recall/refusal tradeoff for each.
 - **Verified ground truth** - every expected file, symbol, and
   `path:start-end` citation is checked against the index before scoring. A
   question whose ground truth cannot be verified aborts the run; it is never
@@ -291,6 +292,21 @@ best fused score reaches `0.02`, and incidental symbol/FTS matches often clear
 that bar on genuinely absent questions. The 7 false positives are listed, with
 their top chunks, in [EVAL.md](EVAL.md), alongside the 6 retrieval misses.
 
+We measured whether the threshold itself can fix that. `atlas eval --sweep`
+re-runs the same `retrieve` at `0.02`, `0.03`, `0.04`, `0.05`, `0.075`, and
+`0.10`; the table is in [EVAL.md](EVAL.md). No candidate clears both floors we
+set (`recall@5 >= 0.850` and `refusal >= 0.750`). At `0.04` refusal reaches
+`0.750`, but recall falls to `0.771` because answerable questions with correct
+but weak matches are refused. At `0.03` recall holds at `0.875` while refusal
+only reaches `0.500`. Dropping the exact-symbol bypass entirely, so the gate is
+a plain score cut, drops recall to `0.396` at `0.04` without improving refusal.
+So the default stays at `0.02`; the score distributions of
+answerable and unanswerable questions overlap, and a constant cannot separate
+them. Fixing refusal needs better matching, not a higher cutoff. There is no
+undiscovered round value either: the only interval that clears both floors is
+`(0.032258, 0.032266]`, between one answerable question and one unanswerable
+false positive, an `8e-6` window that is curve-fitting rather than a threshold.
+
 The paraphrase diagnostic compares questions containing an expected symbol name
 with questions describing the same code in different words: 5/5 for exact-name
 questions and 37/43 for paraphrased questions, a `+0.140` gap. The exact-name
@@ -306,7 +322,7 @@ The suite covers M0-M5: the walker and manifest, Python and tree-sitter parsing,
 graph resolution, incremental indexing and fallbacks, diff text/JSON parity,
 retrieval and refusal, citation validation, the CLI, the web endpoints, and the
 eval harness (synthetic metrics, ground-truth rejection, determinism, refusal,
-and no-model narration handling).
+the threshold sweep against real retrieval, and no-model narration handling).
 
 ## Roadmap
 

@@ -16,6 +16,7 @@ from .diff import NoIndexError, compute_diff, render_text as render_diff, to_dic
 from .entrypoints import find_entrypoints
 from .eval import (
     EvalError,
+    SWEEP_THRESHOLDS,
     load_questions,
     render_json as render_eval_json,
     render_markdown as render_eval_markdown,
@@ -465,6 +466,13 @@ def eval_cmd(
             help="Skip narration even when a local model is reachable.",
         ),
     ] = False,
+    sweep: Annotated[
+        bool,
+        typer.Option(
+            "--sweep",
+            help="Also re-run retrieval across candidate refusal thresholds.",
+        ),
+    ] = False,
 ) -> None:
     """Score retrieval (and optionally narration) on a question set."""
     if repos is not None:
@@ -479,7 +487,12 @@ def eval_cmd(
     try:
         loaded = load_questions(questions)
         specs = resolve_repos(loaded, repos_path)
-        report = run_eval(loaded, specs, model=model)
+        report = run_eval(
+            loaded,
+            specs,
+            model=model,
+            sweep=list(SWEEP_THRESHOLDS) if sweep else None,
+        )
     except EvalError as exc:
         typer.secho(str(exc), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2)

@@ -15,6 +15,22 @@ Retrieval numbers come from the exact M2 path: `retrieve(question, top_k=8, budg
 
 The refusal number is weak: the M2 threshold accepts any question whose best fused score reaches 0.02, even when the matched code is unrelated. The refusal cases below name every false positive.
 
+## Threshold sweep
+
+Every row re-runs the exact M2 `retrieve` for all questions at that `min_score`. The *exact gate* is the shipped rule: refuse when the best fused score is below the threshold and no exact symbol match exists. The *score only* column drops the exact-symbol bypass.
+
+| `min_score` | Recall@5 (exact gate) | Refusal (exact gate) | Recall@5 (score only) | Refusal (score only) |
+| ---: | ---: | ---: | ---: | ---: |
+| 0.0200 | 0.875 (42/48) | 0.417 (5/12) | 0.875 (42/48) | 0.417 (5/12) |
+| 0.0300 | 0.875 (42/48) | 0.500 (6/12) | 0.792 (38/48) | 0.500 (6/12) |
+| 0.0400 | 0.771 (37/48) | 0.750 (9/12) | 0.396 (19/48) | 0.750 (9/12) |
+| 0.0500 | 0.604 (29/48) | 0.750 (9/12) | 0.000 (0/48) | 1.000 (12/12) |
+| 0.0750 | 0.604 (29/48) | 0.750 (9/12) | 0.000 (0/48) | 1.000 (12/12) |
+| 0.1000 | 0.604 (29/48) | 0.750 (9/12) | 0.000 (0/48) | 1.000 (12/12) |
+
+No tested threshold meets both floors (`recall@5 >= 0.850`, `refusal >= 0.750`). The shipped default stays at `0.02` rather than trading away correct answers for refusals.
+On the rows that reach the refusal floor, the exact-match gate keeps recall at 0.771; a plain score cut falls to 0.396. The bypass only changes refusal where its rescued matches sit below the threshold, and by then the recall is already gone.
+
 ## Repositories
 
 | Repo | Pinned version | Commit | Files | Symbols | Chunks | Edges |
