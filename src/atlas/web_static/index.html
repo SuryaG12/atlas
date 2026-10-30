@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Atlas</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="shell">
+  <div class="shell-main">
+    <h1 class="wordmark">Atlas</h1>
+    <div class="shell-id">
+      <div class="repo-name" id="repo-name"></div>
+      <div class="repo-path mono" id="repo-root"></div>
+    </div>
+  </div>
+  <div class="shell-meta">
+    <div class="stats" id="stats" aria-label="Index statistics">
+      <span class="stat"><b id="stat-files">-</b> files</span>
+      <span class="stat"><b id="stat-symbols">-</b> symbols</span>
+      <span class="stat"><b id="stat-edges">-</b> edges</span>
+      <span class="stat"><b id="stat-resolved">-</b> resolved</span>
+    </div>
+    <div class="model" id="model-status" title="">checking model</div>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="pane tree-pane" aria-label="File tree">
+    <div class="pane-head">
+      <span class="pane-title">Files</span>
+      <span class="pane-note" id="file-count"></span>
+    </div>
+    <div class="tree-filter">
+      <input id="tree-filter" type="search" placeholder="Filter files" autocomplete="off"
+             spellcheck="false" aria-label="Filter files">
+    </div>
+    <nav class="tree" id="tree"></nav>
+  </aside>
+
+  <section class="pane center-pane" aria-label="Answer and source">
+    <div class="answer-pane">
+      <form id="ask-form" class="ask-form">
+        <input id="ask-input" type="text" placeholder="Ask about this repo..."
+               autocomplete="off" spellcheck="false" aria-label="Question">
+        <button type="submit" id="ask-button">Ask</button>
+      </form>
+      <div class="answer" id="answer" aria-live="polite">
+        <p class="hint">Ask a question. Answers cite <span class="mono">path:line</span>
+        and run the same retrieval and validation as <span class="mono">atlas ask</span>.</p>
+      </div>
+    </div>
+
+    <div class="source-head">
+      <span class="source-title mono" id="source-title">no file open</span>
+      <span class="source-meta" id="source-meta"></span>
+    </div>
+    <div class="source" id="source">
+      <div class="empty">
+        <div class="empty-title">Nothing open</div>
+        <p class="empty-note">Pick a file from the tree, or ask a question above.
+        Every answer is checked against the index before it is shown.</p>
+      </div>
+    </div>
+  </section>
+
+  <aside class="pane graph-pane" aria-label="Module graph">
+    <div class="pane-head">
+      <span class="pane-title">Modules</span>
+      <div class="seg" id="map-level" role="tablist" aria-label="Graph level">
+        <button type="button" data-level="file" class="active" role="tab"
+                aria-selected="true">File</button>
+        <button type="button" data-level="package" role="tab"
+                aria-selected="false">Package</button>
+      </div>
+    </div>
+    <div class="graph" id="graph">
+      <div class="empty">Loading module graph...</div>
+    </div>
+    <div class="graph-meta" id="graph-meta"></div>
+  </aside>
+</main>
+
+<footer class="statusbar">
+  <span id="status" aria-live="polite">ready</span>
+  <span class="status-right">read-only</span>
+</footer>
+
+<div id="cursor" aria-hidden="true"></div>
+
+<script src="/static/vendor/mermaid.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
