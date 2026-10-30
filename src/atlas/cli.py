@@ -12,9 +12,16 @@ from rich.console import Console
 
 from . import __version__
 from .answer import REFUSAL, answer
+from .diff import NoIndexError, compute_diff, render_text as render_diff, to_dict as diff_to_dict
 from .entrypoints import find_entrypoints
-from .graph import SCHEMA_VERSION, build_graph, graph_schema, open_graph, tree_sitter_status
-from .manifest import build_manifest, write_manifest
+from .graph import (
+    SCHEMA_VERSION,
+    graph_schema,
+    open_graph,
+    tree_sitter_status,
+    update_graph,
+)
+from .manifest import build_manifest, read_manifest, write_manifest
 from .map import build_map
 from .map import render as render_map
 from .narrate import LLMUnavailable, ModelInfo, NO_MODEL_MESSAGE, detect_model
@@ -96,7 +103,14 @@ def _json_summary(root: Path, scan_result, entrypoints, manifest_path: Path | No
     }
     if graph_stats is not None:
         summary["graph"] = {
+            "files": graph_stats.files,
             "parsed": graph_stats.parsed,
+            "skipped": graph_stats.skipped,
+            "deleted": graph_stats.deleted,
+            "added": graph_stats.added,
+            "changed": graph_stats.changed,
+            "full": graph_stats.full,
+            "warning": graph_stats.warning,
             "symbols": graph_stats.symbols,
             "edges": graph_stats.edges,
             "resolved": graph_stats.resolved,
@@ -130,9 +144,14 @@ def index_cmd(
         bool,
         typer.Option("--graph/--no-graph", help="Parse code and build the symbol graph."),
     ] = True,
+    full: Annotated[
+        bool,
+        typer.Option("--full", help="Force a complete rebuild instead of an incremental update."),
+    ] = False,
 ) -> None:
-    """Walk the repo, write .atlas/manifest.json, and print a summary."""
+    """Walk the repo, update the index, and print a summary."""
     root = _validate(path)
+    previous_manifest = read_manifest(root)
     scan_result = scan(
         root,
         excludes=tuple(exclude),
@@ -141,9 +160,20 @@ def index_cmd(
         max_file_bytes=int(max_file_mb * 1024 * 1024),
     )
     entrypoints = find_entrypoints(root, scan_result.files)
+    graph_stats = (
+        update_graph(root, scan_result, previous_manifest, force_full=full)
+        if graph_enabled
+        else None
+    )
     manifest = build_manifest(scan_result, entrypoints)
     manifest_path = write_manifest(root, manifest)
-    graph_stats = build_graph(root, scan_result) if graph_enabled else None
+
+    if graph_stats is not None and graph_stats.warning:
+        typer.secho(
+            f"Warning: {graph_stats.warning}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
 
     if as_json:
         typer.echo(
@@ -377,6 +407,27 @@ def ask_cmd(
             fg=typer.colors.YELLOW,
             err=True,
         )
+
+
+@app.command("diff")
+def diff_cmd(
+    path: PathArg = Path("."),
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit machine-readable JSON.")
+    ] = False,
+) -> None:
+    """Compare the working tree with the last indexed state."""
+    root = _validate(path)
+    try:
+        result = compute_diff(root)
+    except NoIndexError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
+
+    if as_json:
+        typer.echo(jsonlib.dumps(diff_to_dict(result), indent=2))
+        return
+    typer.echo(render_diff(result))
 
 
 @app.command("web")

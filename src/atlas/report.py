@@ -166,15 +166,21 @@ def render(
 
 def render_graph(stats: GraphStats, console: Console) -> None:
     console.print()
-    if not stats.parsed:
-        console.print("[yellow]Graph  no parseable files[/yellow]")
+    if not stats.files:
+        console.print("[yellow]Graph  no files indexed[/yellow]")
         return
 
     line = Text()
     line.append("Graph", style="bold")
     line.append("  ")
+    line.append(f"{stats.files:,}", style="bold")
+    line.append(" files | ")
     line.append(f"{stats.parsed:,}", style="bold")
-    line.append(f"/{stats.files:,} files parsed | ")
+    line.append(" parsed | ")
+    line.append(f"{stats.skipped:,}", style="bold")
+    line.append(" skipped | ")
+    line.append(f"{stats.deleted:,}", style="bold")
+    line.append(" deleted | ")
     line.append(f"{stats.symbols:,}", style="bold")
     line.append(" symbols | ")
     line.append(f"{stats.chunks:,}", style="bold")
@@ -187,6 +193,9 @@ def render_graph(stats: GraphStats, console: Console) -> None:
     line.append(") | ")
     line.append(f"{stats.seconds:.2f}s", style="dim")
     console.print(line)
+
+    if stats.full:
+        console.print("[dim]Mode  full rebuild[/dim]")
 
     if stats.kinds:
         kinds = " | ".join(f"{kind} {count:,}" for kind, count in list(stats.kinds.items())[:6])

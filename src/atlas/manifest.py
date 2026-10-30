@@ -64,3 +64,50 @@ def write_manifest(root: Path, manifest: dict) -> Path:
     tmp.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     os.replace(tmp, target)
     return target
+
+
+def read_manifest(root: Path) -> dict | None:
+    """Read the last manifest, or None when it is missing, corrupt, or old."""
+    path = Path(root) / MANIFEST_DIR / MANIFEST_NAME
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema") != SCHEMA_VERSION:
+        return None
+    entries = payload.get("files")
+    if not isinstance(entries, list):
+        return None
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return None
+        rel = entry.get("path")
+        sha = entry.get("sha256")
+        if not isinstance(rel, str) or not rel or rel in seen:
+            return None
+        if not isinstance(sha, str) or not sha:
+            return None
+        seen.add(rel)
+    return payload
+
+
+def manifest_shas(manifest: dict | None) -> dict[str, str] | None:
+    """Map of path -> SHA-256 from a manifest, or None when unusable."""
+    if not isinstance(manifest, dict):
+        return None
+    entries = manifest.get("files")
+    if not isinstance(entries, list):
+        return None
+    shas: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return None
+        rel = entry.get("path")
+        sha = entry.get("sha256")
+        if not isinstance(rel, str) or not rel or not isinstance(sha, str) or not sha:
+            return None
+        shas[rel] = sha
+    return shas

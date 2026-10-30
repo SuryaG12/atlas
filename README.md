@@ -8,14 +8,15 @@ The graph does the finding. The LLM only narrates what retrieval already found,
 and every quote it produces is validated against the index before it is shown.
 No embeddings, no cloud, no account. Code stays on your machine.
 
-**Status: M0-M3 complete.** 69 tests passing. See [SPEC.md](SPEC.md) for the
+**Status: M0-M4 complete.** 86 tests passing. See [SPEC.md](SPEC.md) for the
 design and [Roadmap](#roadmap) for what comes next.
 
 ## How it works
 
 1. **Index** - walk the repository (gitignore-aware), parse symbols with Python
    `ast` and tree-sitter, and store files, symbols, edges, and import edges in
-   `.atlas/graph.db`.
+   `.atlas/graph.db`. Re-indexing is incremental by default: files whose SHA-256
+   is unchanged are not parsed again.
 2. **Retrieve** - a question is matched against the graph with three weak
    signals: exact/prefix symbol lookup, SQLite FTS5 (BM25) over symbol text, and
    one-hop graph expansion (callers, callees, subclasses, importers). Reciprocal
@@ -51,7 +52,10 @@ pip install -e ".[dev]"
 ## Commands
 
 ```bash
-atlas index .                     # walk, parse, build .atlas/graph.db
+atlas index .                     # incremental update of .atlas/graph.db
+atlas index . --full              # force a complete rebuild
+atlas diff .                      # working tree vs the last indexed state
+atlas diff . --json               # same groups, machine-readable
 atlas stats .                     # walker stats: languages, entry points, largest files
 atlas map .                       # Mermaid import graph (falls back to file level)
 atlas map . --level file --format json
@@ -189,18 +193,52 @@ M3 is a surface, not a second implementation.
   index, model present/absent, file reads and traversal rejection, map levels,
   refusal, cited answers, invalid-citation stripping, and web-vs-CLI parity.
 
+## What M4 does
+
+M4 makes re-indexing cheap and makes the delta visible. It reuses the M0
+manifest and the M1-M2 tables; retrieval, citation validation, parsing, and the
+web UI are unchanged.
+
+- **Incremental index** - `.atlas/manifest.json` already stores a SHA-256 per
+  file. On the next `atlas index`, an unchanged file is skipped entirely: its
+  symbols, chunks, edges, imports, and FTS5 rows stay in place. A changed or new
+  file is re-parsed and only that file's rows are replaced. A deleted file has
+  its rows removed.
+- **Global resolution** - import targets and call edges are re-resolved against
+  the whole graph, so a changed file can break or fix an edge in a file that did
+  not change.
+- **Safe fallback** - `--full` forces a rebuild. A missing, corrupt, or
+  mismatched manifest/graph (schema, shas, or a SQLite error during the update)
+  falls back to a complete rebuild with a plain warning. The incremental update
+  runs in one transaction, so a failure cannot leave a half index.
+- **Reporting** - every index reports files, parsed (changed + new), skipped,
+  deleted, symbols, chunks, edges, and resolution. A second index on an
+  unchanged repo parses 0 files.
+- **`atlas diff`** - compares the working tree with the last indexed state:
+  added/deleted/changed files (with old/new SHA), symbols added/removed/changed
+  as `path:line`, and edge deltas summarised per file. `--json` emits the same
+  groups. A clean repo prints `No changes.` rather than an error.
+- **Read-only diff** - the graph is opened with `mode=ro` and the manifest is
+  only read, so `atlas diff` never changes what the next index sees.
+- **Web parity** - `atlas web` reads the manifest/graph directly, so it reflects
+  an incremental index with no web changes and no second index implementation.
+- **Tests** - 17 new tests cover unchanged second indexes, changed/added/deleted
+  files, diff text/JSON parity, clean diffs, incremental-vs-`--full` snapshot
+  equality, corrupt/missing fallback, and web parity after an incremental run.
+
 ## Numbers
 
-Measured on this repository with `atlas index .` after the M3 files were added:
+Measured on this repository with `atlas index .` after the M4 files were added:
 
 | Files | Lines | Symbols | Chunks | Edges | Internal resolved |
 |---|---|---|---|---|---|
-| 31 | 6,966 | 279 | 279 | 2,037 | 96.2% |
+| 33 | 8,345 | 341 | 341 | 2,510 | 97.0% |
 
-The index is local and disposable: `.atlas/` is gitignored, and `atlas index .`
-rebuilds it in under a second on a repo this size. Non-Python languages need
-Python 3.14 (or another version with tree-sitter wheels); otherwise they are
-walked but not parsed.
+The index is local and disposable: `.atlas/` is gitignored. A full rebuild takes
+well under a second on a repo this size, and a second index with no changes
+parses 0 files (33 skipped) in about 0.01s. Non-Python languages need Python 3.14
+(or another version with tree-sitter wheels); otherwise they are walked but not
+parsed.
 
 ## Dev
 
@@ -208,9 +246,9 @@ walked but not parsed.
 pytest -q
 ```
 
-The suite covers M0-M3: the walker and manifest, Python and tree-sitter parsing,
-graph resolution, retrieval and refusal, citation validation, the CLI, and the
-web endpoints.
+The suite covers M0-M4: the walker and manifest, Python and tree-sitter parsing,
+graph resolution, incremental indexing and fallbacks, diff text/JSON parity,
+retrieval and refusal, citation validation, the CLI, and the web endpoints.
 
 ## Roadmap
 
@@ -220,8 +258,8 @@ web endpoints.
 | M1 | tree-sitter symbols, graph, `atlas map` | done |
 | M2 | Hybrid retrieval + cited `atlas ask` | done |
 | M3 | Local read-only web UI | done |
-| M4 | Diff mode + incremental indexing | next |
-| M5 | Eval harness + public benchmark | |
+| M4 | Diff mode + incremental indexing | done |
+| M5 | Eval harness + public benchmark | next |
 
 ## License
 

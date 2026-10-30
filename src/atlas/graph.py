@@ -1,8 +1,10 @@
 """SQLite graph and retrieval index.
 
 M2 adds symbol-shaped chunks plus an FTS5 index over names, paths, code, and
-docstrings. The graph is still rebuilt from scratch on every ``atlas index``;
-incremental updates arrive in M4.
+docstrings. M4 adds incremental updates: unchanged files keep their rows, and
+only changed, added, or deleted files touch the database. Derived state
+(import targets and edge resolution) is recomputed against the whole graph so
+an incremental index matches a full rebuild.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from pathlib import Path
 from time import perf_counter
 
 from .models import ImportRef, ParsedFile
+from .manifest import manifest_shas
 from .parse import parse_file, tree_sitter_available
 from .walker import ScanResult
 
@@ -108,6 +111,12 @@ class GraphStats:
     internal_edges: int = 0
     imports: int = 0
     parse_errors: int = 0
+    skipped: int = 0
+    deleted: int = 0
+    added: int = 0
+    changed: int = 0
+    full: bool = False
+    warning: str | None = None
     kinds: dict[str, int] = field(default_factory=dict)
     top_symbols: list[tuple[str, int]] = field(default_factory=list)
     top_files: list[tuple[str, int]] = field(default_factory=list)
@@ -338,7 +347,10 @@ def _resolve_edges(conn: sqlite3.Connection) -> tuple[int, int, int]:
     all_paths = tuple(sorted(files.values(), reverse=True))
 
     rows = conn.execute(
-        "SELECT id, file_id, name, qualified_name, kind, parent_id FROM symbols"
+        "SELECT symbols.id, symbols.file_id, symbols.name,"
+        " symbols.qualified_name, symbols.kind, symbols.parent_id"
+        " FROM symbols JOIN files ON files.id = symbols.file_id"
+        " ORDER BY files.path, symbols.start_line, symbols.id"
     ).fetchall()
     by_qual = {row[3]: row[0] for row in rows}
     by_file_name: dict[tuple[int, str], list[int]] = {}
@@ -439,12 +451,7 @@ def _resolve_edges(conn: sqlite3.Connection) -> tuple[int, int, int]:
     return len(pending), len(updates), len(updates) + unresolved_internal
 
 
-def build_graph(
-    root: Path, scan_result: ScanResult, db_path: Path | None = None
-) -> GraphStats:
-    root = Path(root)
-    target = db_path or graph_path(root)
-    started = perf_counter()
+def _drop_database(target: Path) -> None:
     if target.exists():
         target.unlink()
     for suffix in ("-wal", "-shm"):
@@ -452,8 +459,86 @@ def build_graph(
         if leftover.exists():
             leftover.unlink()
 
+
+def _drop_file_rows(conn: sqlite3.Connection, file_id: int) -> None:
+    """Remove everything a file owns, including its FTS5 rows.
+
+    Incoming edges from other files are not deleted here; the caller resets and
+    re-resolves derived state after all file changes are applied.
+    """
+    conn.execute(
+        "DELETE FROM chunks_fts WHERE rowid IN"
+        " (SELECT id FROM chunks WHERE file_id=?)",
+        (file_id,),
+    )
+    conn.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
+    conn.execute("DELETE FROM edges WHERE file_id=?", (file_id,))
+    conn.execute("DELETE FROM imports WHERE file_id=?", (file_id,))
+    conn.execute("DELETE FROM symbols WHERE file_id=?", (file_id,))
+
+
+def _edge_stats(conn: sqlite3.Connection) -> tuple[int, int, int]:
+    """Edge counters without changing anything (used by a no-change index)."""
+    total = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+    resolved = conn.execute("SELECT COUNT(*) FROM edges WHERE dst_id IS NOT NULL").fetchone()[0]
+    unresolved = conn.execute(
+        "SELECT COUNT(*) FROM edges e WHERE e.dst_id IS NULL"
+        " AND EXISTS (SELECT 1 FROM symbols s WHERE s.name = e.dst_name)"
+    ).fetchone()[0]
+    return total, resolved, resolved + unresolved
+
+
+def _fill_stats(
+    conn: sqlite3.Connection,
+    stats: GraphStats,
+    pending: int,
+    resolved: int,
+    internal: int,
+) -> None:
+    stats.edges = pending
+    stats.resolved = resolved
+    stats.internal_edges = internal
+    stats.symbols = conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+    stats.chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    stats.imports = conn.execute("SELECT COUNT(*) FROM imports").fetchone()[0]
+    stats.parse_errors = conn.execute(
+        "SELECT COUNT(*) FROM files WHERE parse_errors > 0"
+    ).fetchone()[0]
+    stats.kinds = {
+        row[0]: row[1]
+        for row in conn.execute(
+            "SELECT kind, COUNT(*) FROM symbols GROUP BY kind ORDER BY COUNT(*) DESC"
+        )
+    }
+    stats.top_symbols = [
+        (row[0], row[1])
+        for row in conn.execute(
+            "SELECT s.qualified_name, COUNT(*) c FROM edges e"
+            " JOIN symbols s ON s.id = e.dst_id"
+            " GROUP BY e.dst_id ORDER BY c DESC, s.qualified_name LIMIT 8"
+        )
+    ]
+    stats.top_files = [
+        (row[0], row[1])
+        for row in conn.execute(
+            "SELECT f.path, COUNT(*) c FROM edges e"
+            " JOIN symbols s ON s.id = e.dst_id"
+            " JOIN files f ON f.id = s.file_id"
+            " GROUP BY f.path ORDER BY c DESC, f.path LIMIT 8"
+        )
+    ]
+
+
+def _rebuild(
+    root: Path,
+    scan_result: ScanResult,
+    target: Path,
+    started: float,
+    warning: str | None = None,
+) -> GraphStats:
+    _drop_database(target)
     conn = _connect(target)
-    stats = GraphStats()
+    stats = GraphStats(full=True, warning=warning)
     try:
         conn.executescript(SCHEMA)
         conn.execute(
@@ -473,53 +558,197 @@ def build_graph(
             parsed = parse_file(root, info)
             if parsed is None:
                 continue
-            stats.parsed += 1
             if parsed.errors:
-                stats.parse_errors += 1
                 conn.execute(
                     "UPDATE files SET parse_errors=? WHERE id=?", (parsed.errors, file_id)
                 )
             symbol_ids = _insert_parsed(conn, file_id, parsed)
-            stats.chunks += _insert_chunks(conn, file_id, info, parsed, symbol_ids, root)
+            _insert_chunks(conn, file_id, info, parsed, symbol_ids, root)
 
         _resolve_imports(conn)
         pending, resolved, internal = _resolve_edges(conn)
         conn.commit()
+        _fill_stats(conn, stats, pending, resolved, internal)
+    finally:
+        conn.close()
 
-        stats.edges = pending
-        stats.resolved = resolved
-        stats.internal_edges = internal
-        stats.symbols = conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
-        stats.chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        stats.imports = conn.execute("SELECT COUNT(*) FROM imports").fetchone()[0]
-        stats.kinds = {
-            row[0]: row[1]
-            for row in conn.execute(
-                "SELECT kind, COUNT(*) FROM symbols GROUP BY kind ORDER BY COUNT(*) DESC"
-            )
-        }
-        stats.top_symbols = [
-            (row[0], row[1])
-            for row in conn.execute(
-                "SELECT s.qualified_name, COUNT(*) c FROM edges e"
-                " JOIN symbols s ON s.id = e.dst_id"
-                " GROUP BY e.dst_id ORDER BY c DESC, s.qualified_name LIMIT 8"
-            )
-        ]
-        stats.top_files = [
-            (row[0], row[1])
-            for row in conn.execute(
-                "SELECT f.path, COUNT(*) c FROM edges e"
-                " JOIN symbols s ON s.id = e.dst_id"
-                " JOIN files f ON f.id = s.file_id"
-                " GROUP BY f.path ORDER BY c DESC, f.path LIMIT 8"
-            )
-        ]
+    stats.parsed = stats.files
+    stats.seconds = perf_counter() - started
+    return stats
+
+
+def _graph_problem(target: Path, manifest_shas: dict[str, str]) -> str | None:
+    """Why an incremental update cannot use the existing database, if any."""
+    if not target.is_file():
+        return "Graph missing"
+    try:
+        conn = sqlite3.connect(f"file:{target.as_posix()}?mode=ro", uri=True)
+        try:
+            row = conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
+            if row is None or int(row[0]) != SCHEMA_VERSION:
+                return "Graph schema is out of date"
+            rows = conn.execute("SELECT path, sha256 FROM files").fetchall()
+        finally:
+            conn.close()
+    except (sqlite3.DatabaseError, TypeError, ValueError):
+        return "Graph is unreadable"
+    if dict(rows) != manifest_shas:
+        return "Manifest and graph disagree"
+    return None
+
+
+def _apply_incremental(
+    root: Path,
+    scan_result: ScanResult,
+    old_shas: dict[str, str],
+    target: Path,
+    started: float,
+) -> GraphStats:
+    new_files = {info.path: info for info in scan_result.files}
+    added = sorted(path for path in new_files if path not in old_shas)
+    deleted = sorted(path for path in old_shas if path not in new_files)
+    changed = sorted(
+        path
+        for path, info in new_files.items()
+        if path in old_shas and old_shas[path] != info.sha256
+    )
+    stats = GraphStats(
+        files=len(new_files),
+        parsed=len(added) + len(changed),
+        skipped=len(new_files) - len(added) - len(changed),
+        deleted=len(deleted),
+        added=len(added),
+        changed=len(changed),
+    )
+
+    if not (added or changed or deleted):
+        # Nothing moved: read the existing rows without rewriting resolution.
+        conn = sqlite3.connect(f"file:{target.as_posix()}?mode=ro", uri=True)
+        try:
+            pending, resolved, internal = _edge_stats(conn)
+            _fill_stats(conn, stats, pending, resolved, internal)
+        finally:
+            conn.close()
+        stats.seconds = perf_counter() - started
+        return stats
+
+    conn = _connect(target)
+    try:
+        with conn:
+            ids = {row[0]: row[1] for row in conn.execute("SELECT path, id FROM files")}
+
+            for path in deleted:
+                file_id = ids.get(path)
+                if file_id is None:
+                    continue
+                _drop_file_rows(conn, file_id)
+                conn.execute("DELETE FROM files WHERE id=?", (file_id,))
+
+            for path in sorted(added + changed):
+                info = new_files[path]
+                file_id = ids.get(path)
+                if file_id is None:
+                    cursor = conn.execute(
+                        "INSERT INTO files"
+                        " (path, language, lines, bytes, sha256, parse_errors)"
+                        " VALUES (?,?,?,?,?,0)",
+                        (info.path, info.language, info.lines, info.bytes, info.sha256),
+                    )
+                    file_id = int(cursor.lastrowid)
+                else:
+                    _drop_file_rows(conn, file_id)
+                    conn.execute(
+                        "UPDATE files SET language=?, lines=?, bytes=?, sha256=?,"
+                        " parse_errors=0 WHERE id=?",
+                        (
+                            info.language,
+                            info.lines,
+                            info.bytes,
+                            info.sha256,
+                            file_id,
+                        ),
+                    )
+
+                parsed = parse_file(root, info)
+                if parsed is None:
+                    continue
+                if parsed.errors:
+                    conn.execute(
+                        "UPDATE files SET parse_errors=? WHERE id=?",
+                        (parsed.errors, file_id),
+                    )
+                symbol_ids = _insert_parsed(conn, file_id, parsed)
+                _insert_chunks(conn, file_id, info, parsed, symbol_ids, root)
+
+            # Derived state is global: a changed or deleted symbol can break an
+            # edge in a file that did not change, and a new symbol can fix one.
+            conn.execute("UPDATE imports SET dst_file_id=NULL")
+            conn.execute("UPDATE edges SET dst_id=NULL, resolution=NULL")
+            _resolve_imports(conn)
+            pending, resolved, internal = _resolve_edges(conn)
+
+        _fill_stats(conn, stats, pending, resolved, internal)
     finally:
         conn.close()
 
     stats.seconds = perf_counter() - started
     return stats
+
+
+def update_graph(
+    root: Path,
+    scan_result: ScanResult,
+    previous_manifest: dict | None = None,
+    db_path: Path | None = None,
+    *,
+    force_full: bool = False,
+) -> GraphStats:
+    """Update the graph incrementally, falling back to a safe full rebuild."""
+    root = Path(root)
+    target = db_path or graph_path(root)
+    started = perf_counter()
+
+    if force_full:
+        return _rebuild(root, scan_result, target, started)
+
+    shas = manifest_shas(previous_manifest)
+    if shas is None:
+        return _rebuild(
+            root,
+            scan_result,
+            target,
+            started,
+            warning="Manifest missing or unreadable; rebuilding the full index.",
+        )
+
+    problem = _graph_problem(target, shas)
+    if problem:
+        return _rebuild(
+            root,
+            scan_result,
+            target,
+            started,
+            warning=f"{problem}; rebuilding the full index.",
+        )
+
+    try:
+        return _apply_incremental(root, scan_result, shas, target, started)
+    except sqlite3.DatabaseError:
+        return _rebuild(
+            root,
+            scan_result,
+            target,
+            started,
+            warning="Incremental update failed; rebuilding the full index.",
+        )
+
+
+def build_graph(
+    root: Path, scan_result: ScanResult, db_path: Path | None = None
+) -> GraphStats:
+    root = Path(root)
+    target = db_path or graph_path(root)
+    return _rebuild(root, scan_result, target, perf_counter())
 
 
 def open_graph(root: Path) -> sqlite3.Connection:
