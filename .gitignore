@@ -1,0 +1,18 @@
+# generated index - never commit
+.atlas/
+
+# environments
+.venv/
+venv/
+.env
+
+# python caches and build output
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+
+# local artifacts
+benchmark.json
