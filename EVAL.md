@@ -2,7 +2,7 @@
 
 Retrieval numbers come from the exact M2 path: `retrieve(question, top_k=8, budget=6000, min_score=0.02)` with RRF fusion and top-8 packing. No embeddings were used.
 
-**Narration: not evaluated** — no local model was configured. Citation validity and faithfulness need narrated answers and are therefore reported as *not evaluated*, not as retrieval scores.
+**Narration: partial** — 2 narration request(s) failed; retrieval metrics are unaffected.
 
 ## Headline
 
@@ -10,8 +10,8 @@ Retrieval numbers come from the exact M2 path: `retrieve(question, top_k=8, budg
 | --- | ---: |
 | Retrieval recall@5 | 0.875 (42/48) |
 | Refusal accuracy (M2 rule) | 0.417 (5/12) |
-| Citation validity | not evaluated |
-| Faithfulness | not evaluated |
+| Citation validity | 1.000 (41/41) |
+| Faithfulness | 0.060 (37/621) |
 
 The refusal number is weak: the M2 threshold accepts any question whose best fused score reaches 0.02, even when the matched code is unrelated. The refusal cases below name every false positive.
 
@@ -54,10 +54,10 @@ Recall@5 is the fraction of answerable questions with an expected file or symbol
 
 | Scope | Recall@5 | Citation validity | Faithfulness | Refusal accuracy |
 | --- | ---: | ---: | ---: | ---: |
-| `fastapi` | 0.812 (13/16) | not evaluated | not evaluated | 0.500 (2/4) |
-| `flask` | 0.875 (14/16) | not evaluated | not evaluated | 0.500 (2/4) |
-| `atlas` | 0.938 (15/16) | not evaluated | not evaluated | 0.250 (1/4) |
-| **overall** | 0.875 (42/48) | not evaluated | not evaluated | 0.417 (5/12) |
+| `fastapi` | 0.812 (13/16) | 1.000 (9/9) | 0.032 (6/188) | 0.500 (2/4) |
+| `flask` | 0.875 (14/16) | 1.000 (8/8) | 0.042 (8/192) | 0.500 (2/4) |
+| `atlas` | 0.938 (15/16) | 1.000 (24/24) | 0.095 (23/241) | 0.250 (1/4) |
+| **overall** | 0.875 (42/48) | 1.000 (41/41) | 0.060 (37/621) | 0.417 (5/12) |
 
 ## Retrieval failures
 
@@ -126,3 +126,8 @@ Sample sizes are small (especially the exact-name group), so treat the gap as di
 ## Ground truth
 
 48 answerable questions were verified against the indexed files, symbols, and chunk ranges before scoring. Unverifiable questions would have aborted the run.
+
+## Narration failures
+
+- fastapi-01: could not reach ollama at http://127.0.0.1:11434: timed out
+- fastapi-04: could not reach ollama at http://127.0.0.1:11434: timed out

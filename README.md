@@ -283,9 +283,34 @@ unanswerable, across three pinned repositories.
 | Atlas | M4 | 0.938 (15/16) | 0.250 (1/4) |
 | **Overall** | | **0.875 (42/48)** | **0.417 (5/12)** |
 
-Citation validity and faithfulness are **not evaluated**: no local model was
-configured, so there were no narrated answers to score. They are not reported as
-retrieval numbers.
+Retrieval is unaffected by narration: `atlas eval` runs the same `retrieve` path
+whether or not a model is present.
+
+### Narration eval
+
+The same question set was run with a local model: Ollama `0.40.13` serving
+`qwen2.5-coder:7b` (4.7 GB) at `http://127.0.0.1:11434`, reached through the
+normal `detect_model` path with no API key and no cloud model. All 48 answerable
+questions were narrated; 46 returned an answer and 2 hit the 30-minute request
+timeout (`fastapi-01`, `fastapi-04`), which are listed as narration failures in
+[EVAL.md](EVAL.md) rather than scored.
+
+| Repo | Citation validity | Faithfulness |
+|---|---:|---:|
+| FastAPI | 1.000 (9/9) | 0.032 (6/188) |
+| Flask | 1.000 (8/8) | 0.042 (8/192) |
+| Atlas | 1.000 (24/24) | 0.095 (23/241) |
+| **Overall** | **1.000 (41/41)** | **0.060 (37/621)** |
+
+Citation validity here is precision only: every citation the model emitted was a
+real path and line range, but it emitted just 41 citations across 46 answers,
+while faithfulness counts 621 claims. The model often wrote a path and then "at
+line N" instead of the required `path:line`, so those claims carried no citation
+at all and fail the containment check. The 1.000 is not a coverage result;
+`0.060` faithfulness is the honest measure of how often a claim was backed by a
+citation inside a retrieved chunk. A 3B model (`qwen2.5-coder:3b`) was tried
+first and rejected: it produced one valid citation across four probe questions
+and refused questions that had answers.
 
 The refusal result is the weak one. The M2 threshold accepts any question whose
 best fused score reaches `0.02`, and incidental symbol/FTS matches often clear
