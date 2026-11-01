@@ -28,6 +28,32 @@ CITATION_RE = re.compile(
     r"`?\b([A-Za-z0-9_][A-Za-z0-9_./\\-]*\.[A-Za-z0-9_]+):(\d+)(?:-(\d+))?`?"
 )
 
+_PATH = r"[A-Za-z0-9_][A-Za-z0-9_./\\-]*\.[A-Za-z0-9_]+"
+CITATION_VARIANT_RE = re.compile(
+    r"(?P<open>`)?(?P<path>" + _PATH + r")(?P<close>`)?\s+"
+    r"(?:(?:at|on)\s+)?lines?\s+(?P<start>\d+)"
+    r"(?:\s*(?:-|to)\s*(?P<end>\d+))?",
+    re.IGNORECASE,
+)
+
+
+def normalize_citations(text: str) -> str:
+    """Rewrite "path at line N" / "path at lines X-Y" into ``path:N`` form.
+
+    Text rewrites are the only thing this does: validation still checks the path,
+    the range, and the retrieved chunks, so an unsupported citation is dropped
+    rather than invented.
+    """
+
+    def rewrite(match: re.Match[str]) -> str:
+        path = match.group("path")
+        start = match.group("start")
+        end = match.group("end")
+        label = f"{path}:{start}" + (f"-{end}" if end else "")
+        return f"`{label}`" if match.group("open") else label
+
+    return CITATION_VARIANT_RE.sub(rewrite, text)
+
 
 @dataclass(slots=True)
 class CitationIssue:
@@ -115,6 +141,7 @@ def validate_citations(
     chunks: list[RetrievalChunk],
     file_lines: dict[str, int],
 ) -> tuple[str, CitationReport]:
+    text = normalize_citations(text)
     report = CitationReport()
     spans: list[tuple[int, int, str]] = []
 

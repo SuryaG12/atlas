@@ -2,7 +2,7 @@
 
 Retrieval numbers come from the exact M2 path: `retrieve(question, top_k=8, budget=6000, min_score=0.02)` with RRF fusion and top-8 packing. No embeddings were used.
 
-**Narration: partial** — 2 narration request(s) failed; retrieval metrics are unaffected.
+**Narration: partial** — 1 narration request(s) failed; retrieval metrics are unaffected.
 
 ## Headline
 
@@ -10,26 +10,10 @@ Retrieval numbers come from the exact M2 path: `retrieve(question, top_k=8, budg
 | --- | ---: |
 | Retrieval recall@5 | 0.875 (42/48) |
 | Refusal accuracy (M2 rule) | 0.417 (5/12) |
-| Citation validity | 1.000 (41/41) |
-| Faithfulness | 0.060 (37/621) |
+| Citation validity | 1.000 (39/39) |
+| Faithfulness | 0.076 (50/660) |
 
 The refusal number is weak: the M2 threshold accepts any question whose best fused score reaches 0.02, even when the matched code is unrelated. The refusal cases below name every false positive.
-
-## Threshold sweep
-
-Every row re-runs the exact M2 `retrieve` for all questions at that `min_score`. The *exact gate* is the shipped rule: refuse when the best fused score is below the threshold and no exact symbol match exists. The *score only* column drops the exact-symbol bypass.
-
-| `min_score` | Recall@5 (exact gate) | Refusal (exact gate) | Recall@5 (score only) | Refusal (score only) |
-| ---: | ---: | ---: | ---: | ---: |
-| 0.0200 | 0.875 (42/48) | 0.417 (5/12) | 0.875 (42/48) | 0.417 (5/12) |
-| 0.0300 | 0.875 (42/48) | 0.500 (6/12) | 0.792 (38/48) | 0.500 (6/12) |
-| 0.0400 | 0.771 (37/48) | 0.750 (9/12) | 0.396 (19/48) | 0.750 (9/12) |
-| 0.0500 | 0.604 (29/48) | 0.750 (9/12) | 0.000 (0/48) | 1.000 (12/12) |
-| 0.0750 | 0.604 (29/48) | 0.750 (9/12) | 0.000 (0/48) | 1.000 (12/12) |
-| 0.1000 | 0.604 (29/48) | 0.750 (9/12) | 0.000 (0/48) | 1.000 (12/12) |
-
-No tested threshold meets both floors (`recall@5 >= 0.850`, `refusal >= 0.750`). The shipped default stays at `0.02` rather than trading away correct answers for refusals.
-On the rows that reach the refusal floor, the exact-match gate keeps recall at 0.771; a plain score cut falls to 0.396. The bypass only changes refusal where its rescued matches sit below the threshold, and by then the recall is already gone.
 
 ## Repositories
 
@@ -54,10 +38,10 @@ Recall@5 is the fraction of answerable questions with an expected file or symbol
 
 | Scope | Recall@5 | Citation validity | Faithfulness | Refusal accuracy |
 | --- | ---: | ---: | ---: | ---: |
-| `fastapi` | 0.812 (13/16) | 1.000 (9/9) | 0.032 (6/188) | 0.500 (2/4) |
-| `flask` | 0.875 (14/16) | 1.000 (8/8) | 0.042 (8/192) | 0.500 (2/4) |
-| `atlas` | 0.938 (15/16) | 1.000 (24/24) | 0.095 (23/241) | 0.250 (1/4) |
-| **overall** | 0.875 (42/48) | 1.000 (41/41) | 0.060 (37/621) | 0.417 (5/12) |
+| `fastapi` | 0.812 (13/16) | 1.000 (11/11) | 0.034 (8/238) | 0.500 (2/4) |
+| `flask` | 0.875 (14/16) | 1.000 (9/9) | 0.095 (18/190) | 0.500 (2/4) |
+| `atlas` | 0.938 (15/16) | 1.000 (19/19) | 0.103 (24/232) | 0.250 (1/4) |
+| **overall** | 0.875 (42/48) | 1.000 (39/39) | 0.076 (50/660) | 0.417 (5/12) |
 
 ## Retrieval failures
 
@@ -130,4 +114,3 @@ Sample sizes are small (especially the exact-name group), so treat the gap as di
 ## Narration failures
 
 - fastapi-01: could not reach ollama at http://127.0.0.1:11434: timed out
-- fastapi-04: could not reach ollama at http://127.0.0.1:11434: timed out

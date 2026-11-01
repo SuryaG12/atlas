@@ -291,26 +291,33 @@ whether or not a model is present.
 The same question set was run with a local model: Ollama `0.40.13` serving
 `qwen2.5-coder:7b` (4.7 GB) at `http://127.0.0.1:11434`, reached through the
 normal `detect_model` path with no API key and no cloud model. All 48 answerable
-questions were narrated; 46 returned an answer and 2 hit the 30-minute request
-timeout (`fastapi-01`, `fastapi-04`), which are listed as narration failures in
-[EVAL.md](EVAL.md) rather than scored.
+questions were narrated; 47 returned an answer and 1 hit the request timeout
+(`fastapi-01`), which is listed as a narration failure in [EVAL.md](EVAL.md)
+rather than scored.
 
 | Repo | Citation validity | Faithfulness |
 |---|---:|---:|
-| FastAPI | 1.000 (9/9) | 0.032 (6/188) |
-| Flask | 1.000 (8/8) | 0.042 (8/192) |
-| Atlas | 1.000 (24/24) | 0.095 (23/241) |
-| **Overall** | **1.000 (41/41)** | **0.060 (37/621)** |
+| FastAPI | 1.000 (11/11) | 0.034 (8/238) |
+| Flask | 1.000 (9/9) | 0.095 (18/190) |
+| Atlas | 1.000 (19/19) | 0.103 (24/232) |
+| **Overall** | **1.000 (39/39)** | **0.076 (50/660)** |
 
-Citation validity here is precision only: every citation the model emitted was a
-real path and line range, but it emitted just 41 citations across 46 answers,
-while faithfulness counts 621 claims. The model often wrote a path and then "at
-line N" instead of the required `path:line`, so those claims carried no citation
-at all and fail the containment check. The 1.000 is not a coverage result;
-`0.060` faithfulness is the honest measure of how often a claim was backed by a
-citation inside a retrieved chunk. A 3B model (`qwen2.5-coder:3b`) was tried
-first and rejected: it produced one valid citation across four probe questions
-and refused questions that had answers.
+The previous run, before citation-format normalization, measured 1.000 (41/41)
+validity and 0.060 (37/621) faithfulness. The normalizer rewrites "path at
+line N" and "path at lines X-Y" into `path:line` before validation, raising
+faithfulness from `0.060` to `0.076` (`+0.016`) while citation validity stayed
+at `1.000`. That is a small gain, **not** a fix: `0.076` is still very low.
+
+Citation validity remains precision only. Every citation emitted was real, but
+only 39 citations were emitted across 47 answers while faithfulness counts 660
+claims. Most claims carry no citation at all, so they fail the containment
+check; the dominant failure is citation omission, not formatting. A prompt
+variant demanding a citation on every claim was measured on a 10-question probe
+and rejected: it raised claims from 96 to 125 while lowering faithfulness from
+0.094 to 0.064. Normalization cannot invent support either, because the path,
+the line range, and the retrieved chunks are all still checked. A 3B model
+(`qwen2.5-coder:3b`) was tried first and rejected: it produced one valid
+citation across four probe questions and refused questions that had answers.
 
 The refusal result is the weak one. The M2 threshold accepts any question whose
 best fused score reaches `0.02`, and incidental symbol/FTS matches often clear
