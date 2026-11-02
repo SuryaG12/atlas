@@ -4,21 +4,26 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Atlas</title>
+<meta name="theme-color" content="#000000">
+<meta name="description" content="Atlas is a read-only, local codebase explainer: browse files, ask questions with cited answers, and explore a module map.">
+<title>Atlas — local codebase explainer</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v=20261104">
 </head>
 <body>
+<a class="skip-link" href="#ask-input">Skip to the question box</a>
+
 <header class="shell">
-  <div class="shell-main">
+  <div class="brand">
     <h1 class="wordmark">Atlas</h1>
+    <span class="brand-div" aria-hidden="true"></span>
     <div class="shell-id">
       <div class="repo-name" id="repo-name"></div>
       <div class="repo-path mono" id="repo-root"></div>
     </div>
   </div>
   <div class="shell-meta">
-    <div class="stats" id="stats" aria-label="Index statistics">
+    <div class="stats" id="stats" role="group" aria-label="Index statistics">
       <span class="stat"><b id="stat-files">-</b> files</span>
       <span class="stat"><b id="stat-symbols">-</b> symbols</span>
       <span class="stat"><b id="stat-edges">-</b> edges</span>
@@ -28,56 +33,114 @@
   </div>
 </header>
 
-<main class="layout">
+<main class="layout" id="main" aria-label="Atlas workspace">
   <aside class="pane tree-pane" aria-label="File tree">
     <div class="pane-head">
       <span class="pane-title">Files</span>
-      <span class="pane-note" id="file-count"></span>
+      <span class="pane-note mono" id="file-count"></span>
     </div>
     <div class="tree-filter">
-      <input id="tree-filter" type="search" placeholder="Filter files" autocomplete="off"
-             spellcheck="false" aria-label="Filter files">
+      <input id="tree-filter" type="search" placeholder="Filter files by name"
+             autocomplete="off" spellcheck="false" aria-label="Filter files by name">
     </div>
-    <nav class="tree" id="tree"></nav>
+    <nav class="tree" id="tree" aria-label="Indexed files"></nav>
   </aside>
 
-  <section class="pane center-pane" aria-label="Answer and source">
-    <div class="answer-pane">
+  <section class="center-pane" aria-label="Answer and source">
+    <div class="pane answer-pane">
+      <div class="ask-head">
+        <span class="ask-title">Ask the repo</span>
+        <button type="button" class="help-link" data-help="1" aria-haspopup="dialog">
+          How it works
+        </button>
+      </div>
       <form id="ask-form" class="ask-form">
         <input id="ask-input" type="text" placeholder="Ask about this repo..."
-               autocomplete="off" spellcheck="false" aria-label="Question">
+               autocomplete="off" spellcheck="false" aria-label="Question"
+               aria-describedby="ask-help">
         <button type="submit" id="ask-button">Ask</button>
+        <span class="visually-hidden" id="ask-help">Ask a plain-English question about this
+        repository. Answers are written by a local model and cite path:line.</span>
       </form>
+      <div class="ask-examples" role="group" aria-label="Example questions">
+        <span class="ask-examples-label">Try</span>
+        <button type="button" class="example" data-question="Where is the entry point?">
+          Where is the entry point?
+        </button>
+        <button type="button" class="example" data-question="How are citations checked?">
+          How are citations checked?
+        </button>
+        <button type="button" class="example" data-question="What does this repo do?">
+          What does this repo do?
+        </button>
+      </div>
       <div class="answer" id="answer" aria-live="polite">
-        <p class="hint">Ask a question. Answers cite <span class="mono">path:line</span>
-        and run the same retrieval and validation as <span class="mono">atlas ask</span>.</p>
+        <p class="hint">Ask a question about this repo. Answers are written by a
+        local model and cite <span class="mono">path:line</span>.</p>
+        <p class="hint-sub">New here?
+          <button type="button" class="linklike" data-help="1">Open the 4-step guide</button>.
+        </p>
       </div>
     </div>
 
-    <div class="source-head">
-      <span class="source-title mono" id="source-title">no file open</span>
-      <span class="source-meta" id="source-meta"></span>
-    </div>
-    <div class="source" id="source">
-      <div class="empty">
-        <div class="empty-title">Nothing open</div>
-        <p class="empty-note">Pick a file from the tree, or ask a question above.
-        Every answer is checked against the index before it is shown.</p>
+    <div class="pane source-pane">
+      <div class="source-head">
+        <span class="source-title mono" id="source-title">no file open</span>
+        <span class="source-meta" id="source-meta"></span>
+      </div>
+      <div class="source" id="source" role="region" aria-label="Source code" tabindex="0">
+        <div class="empty">
+          <div class="empty-title">Start here</div>
+          <p class="empty-note">Atlas reads this repository and shows you where things live.
+          Nothing is edited or uploaded.</p>
+          <ol class="empty-steps">
+            <li><b>Pick a file</b> in Files, or filter the list by name.</li>
+            <li><b>Ask a question</b> above; the local model can take a minute.</li>
+            <li><b>Follow a blue citation</b> to jump to the exact lines.</li>
+            <li><b>Use the module map</b> to see how files connect; expand it for more space.</li>
+          </ol>
+          <button type="button" class="linklike" data-help="1">How to use Atlas</button>
+        </div>
       </div>
     </div>
   </section>
 
-  <aside class="pane graph-pane" aria-label="Module graph">
+  <aside class="pane graph-pane" id="graph-pane" aria-label="Module graph">
     <div class="pane-head">
       <span class="pane-title">Modules</span>
-      <div class="seg" id="map-level" role="tablist" aria-label="Graph level">
-        <button type="button" data-level="file" class="active" role="tab"
-                aria-selected="true">File</button>
-        <button type="button" data-level="package" role="tab"
-                aria-selected="false">Package</button>
+      <div class="graph-head-tools">
+        <div class="seg" id="map-level" role="tablist" aria-label="Graph level">
+          <button type="button" data-level="file" class="active" role="tab"
+                  id="tab-file" aria-selected="true" aria-controls="graph">File</button>
+          <button type="button" data-level="package" role="tab"
+                  id="tab-package" aria-selected="false" aria-controls="graph">Package</button>
+        </div>
+        <div class="graph-actions">
+          <button type="button" class="tool-btn" id="graph-expand"
+                  aria-pressed="false" aria-controls="graph"
+                  title="Expand the module map">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M6 2H2v4M10 14h4v-4M2 2l4.5 4.5M14 14l-4.5-4.5"/>
+            </svg>
+            <span class="tool-label">Expand</span>
+          </button>
+          <button type="button" class="tool-btn" id="graph-collapse"
+                  aria-expanded="true" aria-controls="graph"
+                  title="Hide the module map">
+            <svg class="icon chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M3.5 6.5 8 11l4.5-4.5"/>
+            </svg>
+            <span class="tool-label">Hide</span>
+          </button>
+        </div>
       </div>
     </div>
-    <div class="graph" id="graph">
+    <div class="graph-help" id="graph-help">
+      <span>Click a box to open its file.</span>
+      <span class="graph-help-dim">Scroll to pan</span>
+    </div>
+    <div class="graph" id="graph" role="tabpanel" aria-labelledby="tab-file"
+         aria-describedby="graph-help">
       <div class="empty">Loading module graph...</div>
     </div>
     <div class="graph-meta" id="graph-meta"></div>
@@ -86,12 +149,63 @@
 
 <footer class="statusbar">
   <span id="status" aria-live="polite">ready</span>
-  <span class="status-right">read-only</span>
+  <span class="status-right" title="Atlas only reads files and never changes this repository">
+    read-only
+  </span>
 </footer>
 
-<div id="cursor" aria-hidden="true"></div>
+<dialog class="help-dialog" id="help-dialog" aria-labelledby="help-title">
+  <div class="help-panel">
+    <div class="help-top">
+      <span class="help-kicker">Beginner's guide</span>
+      <button type="button" class="help-close" id="help-close" aria-label="Close guide">
+        <span aria-hidden="true">&times;</span>
+      </button>
+    </div>
+    <h2 id="help-title">How to use Atlas</h2>
+    <p class="help-intro">Atlas is a read-only map of this repository. It reads code and answers
+    questions with a local model. Nothing is uploaded and nothing is changed.</p>
+    <ol class="help-steps">
+      <li>
+        <span class="help-num" aria-hidden="true">1</span>
+        <div>
+          <h3>Open a file</h3>
+          <p>Browse <b>Files</b> on the left or type in <b>Filter files by name</b>. Click a file
+          to read it with line numbers on the right.</p>
+        </div>
+      </li>
+      <li>
+        <span class="help-num" aria-hidden="true">2</span>
+        <div>
+          <h3>Ask a question</h3>
+          <p>Type a plain-English question in the box above and press <b>Ask</b>. The local model
+          can take a minute. Answers cite the code they used.</p>
+        </div>
+      </li>
+      <li>
+        <span class="help-num" aria-hidden="true">3</span>
+        <div>
+          <h3>Follow a citation</h3>
+          <p>Blue links such as <span class="mono">src/atlas/answer.py:113-155</span> jump to the
+          exact lines. Every citation is checked against the index before it is shown.</p>
+        </div>
+      </li>
+      <li>
+        <span class="help-num" aria-hidden="true">4</span>
+        <div>
+          <h3>Explore the module map</h3>
+          <p>Switch between <b>File</b> and <b>Package</b>, click any box to open that file, and
+          press <b>Expand</b> for a full-screen map. Press <b>Esc</b> to restore it.</p>
+        </div>
+      </li>
+    </ol>
+    <div class="help-foot">
+      <span class="help-note">Press Esc to close this guide.</span>
+      <button type="button" class="help-gotit" id="help-gotit" autofocus>Got it</button>
+    </div>
+  </div>
+</dialog>
 
-<script src="/static/vendor/mermaid.min.js"></script>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=20261104"></script>
 </body>
 </html>

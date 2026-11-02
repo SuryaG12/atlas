@@ -69,7 +69,8 @@ def test_page_serves(client: TestClient) -> None:
     assert response.status_code == 200
     assert "Atlas" in response.text
     assert "/static/app.js" in response.text
-    assert "/static/vendor/mermaid.min.js" in response.text
+    # The map is drawn by app.js from /api/map, so no vendored runtime is loaded.
+    assert "/static/vendor/" not in response.text
     # Local-only surface: no remote assets and no 0.0.0.0 reference.
     assert "http://" not in response.text
     assert "https://" not in response.text
@@ -79,7 +80,7 @@ def test_page_serves(client: TestClient) -> None:
 def test_static_assets_served(client: TestClient) -> None:
     assert client.get("/static/app.css").status_code == 200
     assert client.get("/static/app.js").status_code == 200
-    assert client.get("/static/vendor/mermaid.min.js").status_code == 200
+    assert client.get("/static/vendor/mermaid.min.js").status_code == 404
 
 
 def test_bind_host_is_loopback_only() -> None:
