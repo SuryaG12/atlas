@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import posixpath
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -158,6 +159,8 @@ def create_app(root: Path) -> FastAPI:
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-store, max-age=0"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; img-src 'self' data:; "
             "style-src 'self' 'unsafe-inline'; script-src 'self'"
@@ -236,8 +239,7 @@ def create_app(root: Path) -> FastAPI:
         payload["mermaid"] = to_mermaid(data)
         return payload
 
-    @app.post("/api/ask")
-    def ask(body: AskBody):
+    def _ask_payload(body: AskBody) -> dict:
         conn = _open()
         try:
             retrieval = retrieve(
@@ -285,6 +287,13 @@ def create_app(root: Path) -> FastAPI:
         response = result.to_dict()
         response["mode"] = "answer"
         return response
+
+    @app.post("/api/ask")
+    def ask(body: AskBody):
+        started = time.perf_counter()
+        payload = _ask_payload(body)
+        payload["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
+        return payload
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     return app

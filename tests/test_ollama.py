@@ -89,3 +89,46 @@ def test_live_ollama_model_override(
 
     assert info is not None
     assert info.model == LIVE_MODELS[0]
+
+
+def test_complete_sends_generation_cap_and_keep_alive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from atlas import narrate
+
+    captured: dict = {}
+
+    def fake_post(url, payload, timeout, headers=None):
+        captured["url"] = url
+        captured["payload"] = payload
+        return {"message": {"content": "  cited answer  "}}
+
+    monkeypatch.delenv("ATLAS_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("ATLAS_KEEP_ALIVE", raising=False)
+    monkeypatch.setattr(narrate, "_post_json", fake_post)
+    info = ModelInfo("ollama", "test-model", "http://127.0.0.1:11434")
+
+    assert narrate.complete("system", "prompt", info) == "cited answer"
+    assert captured["url"].endswith("/api/chat")
+    assert captured["payload"]["options"]["num_predict"] == 512
+    assert captured["payload"]["keep_alive"] == "2h"
+
+
+def test_complete_can_disable_the_generation_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from atlas import narrate
+
+    captured: dict = {}
+
+    def fake_post(url, payload, timeout, headers=None):
+        captured.update(payload)
+        return {"message": {"content": "ok"}}
+
+    monkeypatch.setenv("ATLAS_MAX_TOKENS", "0")
+    monkeypatch.setattr(narrate, "_post_json", fake_post)
+    info = ModelInfo("ollama", "test-model", "http://127.0.0.1:11434")
+
+    narrate.complete("system", "prompt", info)
+
+    assert "num_predict" not in captured["options"]

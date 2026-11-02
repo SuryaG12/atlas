@@ -91,6 +91,8 @@ what retrieval found.
 | `ATLAS_OLLAMA_URL` | override the Ollama base URL |
 | `ATLAS_MODEL` | Ollama model name (default: first installed) |
 | `ATLAS_LLM_TIMEOUT` | request timeout in seconds (default 300) |
+| `ATLAS_MAX_TOKENS` | generation cap per reply (default 512; `0` disables) |
+| `ATLAS_KEEP_ALIVE` | how long Ollama keeps the model loaded (default `2h`) |
 
 ## Web UI
 
@@ -108,6 +110,10 @@ frontend framework.
   offline; if drawing fails it falls back to a clickable list.
 - **Citations** - every `path:line` / `path:start-end` is clickable and opens
   that file, scrolls to the line, and highlights the range.
+- **Speed** - the file filter is debounced, repeated questions render from a
+  browser-session cache, and the answer meta shows how long the answer took.
+  `ATLAS_KEEP_ALIVE` keeps the model warm between questions and
+  `ATLAS_MAX_TOKENS` stops a runaway generation.
 - **No model** - the header reads `no local model`, and the ask box still shows
   the retrieved chunks, exactly like `--no-llm`.
 
@@ -120,12 +126,15 @@ are served from the package; the page makes no external requests.
 memory. Nothing writes, edits, or deletes files, and file reads are limited to
 paths present in the index (no absolute paths, no traversal).
 
-Design is ported from the Dayo Venn system (not the Framer template): dark shell,
-oversized tight `ATLAS` wordmark, dense 13-14px panes, hairline borders, one
-accent (`#38BDF8`) for links, citations, and the active file, and a single
-staggered entrance. Clash Grotesk / Satoshi / JetBrains Mono are used when
-installed, falling back to Inter and system monospace. The native text cursor is
-kept inside code and answers.
+Design follows the Monitor template
+(`framer.com/marketplace/templates/monitor`): black canvas, `#0D0D0D` cards,
+`#1C1C1C`/`#1F1F1F` raised fills, `#8A8A8A` muted text, `#0072F5` for fills and
+focus rings, `#4D9FFF` for link and citation text, one `#00F597` mint mark, a
+Geist-like grotesque at weight 500 with tight tracking, and 10/16px radii with
+pill actions. The CSP blocks external fonts, so the stacks resolve to the
+closest installed grotesque (Segoe UI Variable) and code face (Cascadia Code).
+Skip link, guide, `prefers-contrast`/`forced-colors` overrides and keyboard
+graph nodes live in `web_static/`.
 
 ## What M0 does
 

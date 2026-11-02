@@ -13,6 +13,8 @@ Configuration (all optional):
     ATLAS_OLLAMA_URL   override the Ollama base URL
     ATLAS_MODEL        model name for Ollama (defaults to first installed)
     ATLAS_LLM_TIMEOUT  seconds, default 300
+    ATLAS_MAX_TOKENS   generation cap, default 512 (0 disables the cap)
+    ATLAS_KEEP_ALIVE   how long Ollama keeps the model loaded, default 2h
 """
 
 from __future__ import annotations
@@ -24,6 +26,29 @@ import urllib.request
 from dataclasses import dataclass
 
 DEFAULT_OLLAMA = "http://127.0.0.1:11434"
+
+# Speed defaults. A local 7B model on CPU generates at roughly 2 tok/s, so an
+# uncapped answer can run for many minutes. 512 tokens is far more than a cited
+# answer needs and stops a runaway generation. keep_alive stops Ollama from
+# evicting the model between questions, which otherwise costs a full reload
+# (tens of seconds) on the first ask after an idle period.
+DEFAULT_MAX_TOKENS = 512
+DEFAULT_KEEP_ALIVE = "2h"
+
+
+def _max_tokens() -> int | None:
+    raw = os.environ.get("ATLAS_MAX_TOKENS", "").strip()
+    if not raw:
+        return DEFAULT_MAX_TOKENS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_TOKENS
+    return value if value > 0 else None
+
+
+def _keep_alive() -> str:
+    return os.environ.get("ATLAS_KEEP_ALIVE", DEFAULT_KEEP_ALIVE).strip() or DEFAULT_KEEP_ALIVE
 
 NO_MODEL_MESSAGE = (
     "No local model configured. Start Ollama on http://127.0.0.1:11434 "
@@ -115,16 +140,21 @@ def complete(system: str, prompt: str, info: ModelInfo, timeout: float | None = 
         {"role": "system", "content": system},
         {"role": "user", "content": prompt},
     ]
+    max_tokens = _max_tokens()
 
     try:
         if info.provider == "ollama":
+            options: dict = {"temperature": 0.1}
+            if max_tokens:
+                options["num_predict"] = max_tokens
             data = _post_json(
                 info.endpoint.rstrip("/") + "/api/chat",
                 {
                     "model": info.model,
                     "messages": messages,
                     "stream": False,
-                    "options": {"temperature": 0.1},
+                    "options": options,
+                    "keep_alive": _keep_alive(),
                 },
                 request_timeout,
             )
@@ -135,9 +165,12 @@ def complete(system: str, prompt: str, info: ModelInfo, timeout: float | None = 
             api_key = os.environ.get("ATLAS_LLM_API_KEY", "").strip()
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
+            body = {"model": info.model, "messages": messages, "temperature": 0.1}
+            if max_tokens:
+                body["max_tokens"] = max_tokens
             data = _post_json(
                 _chat_endpoint(info.endpoint),
-                {"model": info.model, "messages": messages, "temperature": 0.1},
+                body,
                 request_timeout,
                 headers,
             )
