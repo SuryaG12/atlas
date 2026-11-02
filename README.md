@@ -102,8 +102,10 @@ frontend framework.
 - **Ask** - the box calls the same `retrieve`, `answer`, and
   `validate_citations` functions as `atlas ask`, so the answer, the
   `[invalid citation removed]` handling, and the refusal are identical.
-- **Modules** - the `atlas map` graph rendered as Mermaid, file level by default
-  and package level on demand. Mermaid is vendored, so it renders offline.
+- **Modules** - the `atlas map` graph drawn as native SVG from `/api/map`, file
+  level by default and package level on demand, with node and edge counts and a
+  clickable box per file. No third-party script and no CDN, so it renders
+  offline; if drawing fails it falls back to a clickable list.
 - **Citations** - every `path:line` / `path:start-end` is clickable and opens
   that file, scrolls to the line, and highlights the range.
 - **No model** - the header reads `no local model`, and the ask box still shows
