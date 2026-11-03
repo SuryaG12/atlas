@@ -110,10 +110,14 @@ frontend framework.
   offline; if drawing fails it falls back to a clickable list.
 - **Citations** - every `path:line` / `path:start-end` is clickable and opens
   that file, scrolls to the line, and highlights the range.
+- **Guide** - the first visit opens a four-step beginner guide, also reachable
+  from **How it works**; example question chips fill the ask box.
 - **Speed** - the file filter is debounced, repeated questions render from a
   browser-session cache, and the answer meta shows how long the answer took.
   `ATLAS_KEEP_ALIVE` keeps the model warm between questions and
   `ATLAS_MAX_TOKENS` stops a runaway generation.
+- **Map controls** - **Expand** gives the graph the whole window, **Hide** folds
+  it to its header, `Esc` restores it, and graph boxes are keyboard buttons.
 - **No model** - the header reads `no local model`, and the ask box still shows
   the retrieved chunks, exactly like `--no-llm`.
 
