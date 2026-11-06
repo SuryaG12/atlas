@@ -315,7 +315,9 @@ def create_app(root: Path) -> FastAPI:
             }
 
         try:
-            result = answer(body.question, retrieval, file_lines, model=info)
+            result = answer(
+                body.question, retrieval, file_lines, model=info, scope=scope
+            )
         except LLMUnavailable as exc:
             return {
                 "mode": "error",

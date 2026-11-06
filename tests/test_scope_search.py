@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from atlas.answer import REFUSAL
+from atlas.answer import REFUSAL, SCOPED_SYSTEM_PROMPT, SYSTEM_PROMPT, answer
 from atlas.entrypoints import find_entrypoints
 from atlas.graph import build_graph, open_graph
 from atlas.manifest import build_manifest, write_manifest
@@ -128,6 +128,62 @@ def test_scoped_ask_limits_prompt_to_the_file(client: TestClient, monkeypatch) -
     assert len(prompts) == 1
     assert "app/service.py" in prompts[0]
     assert "util/text.py" not in prompts[0]
+
+
+def test_scoped_answer_uses_the_overview_contract(repo: Path) -> None:
+    conn = open_graph(repo)
+    try:
+        retrieval = retrieve(conn, "Explain this file.", scope="app/service.py")
+    finally:
+        conn.close()
+
+    seen: dict[str, str] = {}
+
+    def narrator(system: str, prompt: str) -> str:
+        seen["system"] = system
+        seen["prompt"] = prompt
+        return "`greet` calls `shout` (`app/service.py:3-5`)."
+
+    result = answer(
+        "Explain this file.",
+        retrieval,
+        {"app/service.py": 9},
+        narrator=narrator,
+        scope="app/service.py",
+    )
+
+    assert result.trusted is True
+    assert seen["system"] == SCOPED_SYSTEM_PROMPT
+    assert "3 to 5 bullets" in seen["system"]
+    assert "never exceed 220" in seen["system"]
+    assert "short file overview" in seen["prompt"]
+
+
+def test_repo_wide_answer_keeps_the_standard_contract(repo: Path) -> None:
+    conn = open_graph(repo)
+    try:
+        retrieval = retrieve(conn, "how does greet work?")
+    finally:
+        conn.close()
+
+    seen: dict[str, str] = {}
+
+    def narrator(system: str, prompt: str) -> str:
+        seen["system"] = system
+        seen["prompt"] = prompt
+        return "`greet` calls `shout` (`app/service.py:3-5`)."
+
+    answer(
+        "how does greet work?",
+        retrieval,
+        {"app/service.py": 9},
+        narrator=narrator,
+    )
+
+    assert seen["system"] == SYSTEM_PROMPT
+    assert "file overview request" not in seen["system"]
+    assert "short file overview" not in seen["prompt"]
+    assert "Answer the question" in seen["prompt"]
 
 
 def test_scoped_ask_refuses_unindexed_file(client: TestClient, monkeypatch) -> None:

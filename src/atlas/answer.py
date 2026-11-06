@@ -24,6 +24,23 @@ Rules:
    and mention the symbols you relied on by name.
 """
 
+# A scoped ask receives every chunk from one file in reading order. The generic
+# prompt's "be concise" is not enough there: the model tends to walk each symbol
+# in turn until it hits the token cap. Ask for a short overview instead, with a
+# flat bullet list and an explicit stopping point, so generation ends on its own.
+SCOPED_GUIDANCE = """
+This is a file overview request: every excerpt comes from one file, in reading order.
+Write a short overview, not a symbol-by-symbol walkthrough:
+- One or two sentences on the file's purpose.
+- Then 3 to 5 bullets, each naming one important symbol and what it does.
+- End every bullet with a citation using the real path from the excerpt header,
+  for example `app/service.py:3-5`. Never write the word "path" as a placeholder.
+- Do not describe every symbol or restate code line by line.
+- Stop after the bullets. Aim for 150 words, never exceed 220.
+"""
+
+SCOPED_SYSTEM_PROMPT = SYSTEM_PROMPT + SCOPED_GUIDANCE
+
 CITATION_RE = re.compile(
     r"`?\b([A-Za-z0-9_][A-Za-z0-9_./\\-]*\.[A-Za-z0-9_]+):(\d+)(?:-(\d+))?`?"
 )
@@ -109,7 +126,9 @@ def _normalize_path(path: str) -> str:
     return normalized
 
 
-def build_prompt(question: str, chunks: list[RetrievalChunk]) -> str:
+def build_prompt(
+    question: str, chunks: list[RetrievalChunk], *, scoped: bool = False
+) -> str:
     parts = [f"Question: {question}", "", "Code excerpts:"]
     for index, chunk in enumerate(chunks, start=1):
         header = (
@@ -130,9 +149,15 @@ def build_prompt(question: str, chunks: list[RetrievalChunk]) -> str:
         block.append("```")
         parts.append("\n".join(block))
     parts.append("")
-    parts.append(
-        "Answer the question using only these excerpts. Cite every code claim."
-    )
+    if scoped:
+        parts.append(
+            "Give the short file overview described in the system prompt, using"
+            " only these excerpts. Cite every code claim with the real path."
+        )
+    else:
+        parts.append(
+            "Answer the question using only these excerpts. Cite every code claim."
+        )
     return "\n".join(parts)
 
 
@@ -189,6 +214,7 @@ def answer(
     *,
     model: ModelInfo | None = None,
     narrator: Callable[[str, str], str] | None = None,
+    scope: str | None = None,
 ) -> AnswerResult:
     if retrieval.refused or not retrieval.chunks:
         return AnswerResult(
@@ -200,13 +226,15 @@ def answer(
             model=model,
         )
 
-    prompt = build_prompt(question, retrieval.chunks)
+    scoped = scope is not None
+    prompt = build_prompt(question, retrieval.chunks, scoped=scoped)
+    system = SCOPED_SYSTEM_PROMPT if scoped else SYSTEM_PROMPT
     if narrator is None:
         if model is None:
             raise RuntimeError("no model configured")
-        text = complete(SYSTEM_PROMPT, prompt, model)
+        text = complete(system, prompt, model)
     else:
-        text = narrator(SYSTEM_PROMPT, prompt)
+        text = narrator(system, prompt)
 
     if text.strip() == REFUSAL:
         return AnswerResult(
