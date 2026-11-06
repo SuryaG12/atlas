@@ -23,6 +23,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 DEFAULT_OLLAMA = "http://127.0.0.1:11434"
@@ -96,6 +97,17 @@ def _post_json(url: str, payload: dict, timeout: float, headers: dict | None = N
     request = urllib.request.Request(url, data=body, headers=request_headers, method="POST")
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _post_stream(
+    url: str, payload: dict, timeout: float, headers: dict | None = None
+):
+    body = json.dumps(payload).encode("utf-8")
+    request_headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+    if headers:
+        request_headers.update(headers)
+    request = urllib.request.Request(url, data=body, headers=request_headers, method="POST")
+    return urllib.request.urlopen(request, timeout=timeout)
 
 
 def detect_model(timeout: float | None = None) -> ModelInfo | None:
@@ -192,3 +204,100 @@ def complete(system: str, prompt: str, info: ModelInfo, timeout: float | None = 
     if not content or not str(content).strip():
         raise LLMUnavailable(f"{info.provider} returned an empty response")
     return str(content).strip()
+
+
+def stream(
+    system: str, prompt: str, info: ModelInfo, timeout: float | None = None
+) -> Iterator[str]:
+    """Yield answer deltas as the local model produces them.
+
+    The transport is the same as ``complete``: Ollama NDJSON or OpenAI-compatible
+    SSE. Errors surface as ``LLMUnavailable`` just like a non-streamed call, so
+    the web layer can report them without leaking provider details.
+    """
+    request_timeout = _timeout(300.0) if timeout is None else timeout
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": prompt},
+    ]
+    max_tokens = _max_tokens()
+    produced = False
+
+    try:
+        if info.provider == "ollama":
+            options: dict = {"temperature": 0.1}
+            if max_tokens:
+                options["num_predict"] = max_tokens
+            response = _post_stream(
+                info.endpoint.rstrip("/") + "/api/chat",
+                {
+                    "model": info.model,
+                    "messages": messages,
+                    "stream": True,
+                    "options": options,
+                    "keep_alive": _keep_alive(),
+                },
+                request_timeout,
+            )
+            with response:
+                for raw in response:
+                    line = raw.decode("utf-8").strip()
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    if data.get("error"):
+                        raise LLMUnavailable(str(data["error"]))
+                    content = (data.get("message") or {}).get("content") or ""
+                    if content:
+                        produced = True
+                        yield content
+                    if data.get("done"):
+                        break
+        else:
+            headers = {}
+            api_key = os.environ.get("ATLAS_LLM_API_KEY", "").strip()
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            body = {
+                "model": info.model,
+                "messages": messages,
+                "temperature": 0.1,
+                "stream": True,
+            }
+            if max_tokens:
+                body["max_tokens"] = max_tokens
+            response = _post_stream(
+                _chat_endpoint(info.endpoint),
+                body,
+                request_timeout,
+                headers,
+            )
+            with response:
+                for raw in response:
+                    line = raw.decode("utf-8").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data_text = line[5:].strip()
+                    if data_text == "[DONE]":
+                        break
+                    data = json.loads(data_text)
+                    choices = data.get("choices") or []
+                    delta = ((choices[0] or {}).get("delta") or {}) if choices else {}
+                    content = delta.get("content")
+                    if content:
+                        produced = True
+                        yield content
+    except urllib.error.HTTPError as exc:
+        raise LLMUnavailable(
+            f"{info.provider} returned HTTP {exc.code} at {info.endpoint}"
+        ) from exc
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        raise LLMUnavailable(
+            f"could not reach {info.provider} at {info.endpoint}: {exc}"
+        ) from exc
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise LLMUnavailable(f"{info.provider} returned invalid JSON: {exc}") from exc
+
+    if not produced:
+        raise LLMUnavailable(f"{info.provider} returned an empty response")
+

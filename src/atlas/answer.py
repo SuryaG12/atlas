@@ -207,35 +207,24 @@ def validate_citations(
     return clean.strip(), report
 
 
-def answer(
+def prompt_for(
+    question: str, retrieval: RetrievalResult, *, scope: str | None = None
+) -> tuple[str, str]:
+    """Return the system prompt and user prompt for one answer request."""
+    scoped = scope is not None
+    system = SCOPED_SYSTEM_PROMPT if scoped else SYSTEM_PROMPT
+    return system, build_prompt(question, retrieval.chunks, scoped=scoped)
+
+
+def finalize_answer(
     question: str,
     retrieval: RetrievalResult,
     file_lines: dict[str, int],
+    text: str,
     *,
     model: ModelInfo | None = None,
-    narrator: Callable[[str, str], str] | None = None,
-    scope: str | None = None,
 ) -> AnswerResult:
-    if retrieval.refused or not retrieval.chunks:
-        return AnswerResult(
-            question=question,
-            answer=REFUSAL,
-            refused=True,
-            retrieval=retrieval,
-            citations=CitationReport(),
-            model=model,
-        )
-
-    scoped = scope is not None
-    prompt = build_prompt(question, retrieval.chunks, scoped=scoped)
-    system = SCOPED_SYSTEM_PROMPT if scoped else SYSTEM_PROMPT
-    if narrator is None:
-        if model is None:
-            raise RuntimeError("no model configured")
-        text = complete(system, prompt, model)
-    else:
-        text = narrator(system, prompt)
-
+    """Turn raw model text into a validated answer (used by sync and streaming)."""
     if text.strip() == REFUSAL:
         return AnswerResult(
             question=question,
@@ -256,3 +245,33 @@ def answer(
         model=model,
         trusted=bool(report.valid) and report.ok,
     )
+
+
+def answer(
+    question: str,
+    retrieval: RetrievalResult,
+    file_lines: dict[str, int],
+    *,
+    model: ModelInfo | None = None,
+    narrator: Callable[[str, str], str] | None = None,
+    scope: str | None = None,
+) -> AnswerResult:
+    if retrieval.refused or not retrieval.chunks:
+        return AnswerResult(
+            question=question,
+            answer=REFUSAL,
+            refused=True,
+            retrieval=retrieval,
+            citations=CitationReport(),
+            model=model,
+        )
+
+    system, prompt = prompt_for(question, retrieval, scope=scope)
+    if narrator is None:
+        if model is None:
+            raise RuntimeError("no model configured")
+        text = complete(system, prompt, model)
+    else:
+        text = narrator(system, prompt)
+
+    return finalize_answer(question, retrieval, file_lines, text, model=model)

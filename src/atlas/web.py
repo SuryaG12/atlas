@@ -16,15 +16,15 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .answer import REFUSAL, answer
+from .answer import REFUSAL, answer, finalize_answer, prompt_for
 from .graph import SCHEMA_VERSION, graph_schema, open_graph
 from .manifest import MANIFEST_DIR, MANIFEST_NAME
 from .map import build_map, to_json, to_mermaid
-from .narrate import LLMUnavailable, NO_MODEL_MESSAGE, detect_model
+from .narrate import LLMUnavailable, NO_MODEL_MESSAGE, detect_model, stream
 from .retrieval import retrieve
 
 BIND_HOST = "127.0.0.1"
@@ -34,6 +34,17 @@ STATIC_DIR = Path(__file__).with_name("web_static")
 
 NO_GRAPH = "No graph found. Run `atlas index .` first."
 STALE_GRAPH = "Graph index is out of date. Run `atlas index .` again."
+
+
+def _sse(event: str, data: dict) -> str:
+    """One server-sent event. JSON on a single data line keeps parsing simple."""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _ms(since: float | None, started: float) -> int | None:
+    if since is None:
+        return None
+    return int((since - started) * 1000)
 
 
 class AskBody(BaseModel):
@@ -250,12 +261,13 @@ def create_app(root: Path) -> FastAPI:
         payload["mermaid"] = to_mermaid(data)
         return payload
 
-    def _ask_payload(body: AskBody) -> dict:
+    def _prepare(body: AskBody):
+        """Resolve the optional scope and retrieve once for sync or streaming."""
         scope = None
         if body.path:
             scope = _safe_relpath(body.path)
             if scope is None:
-                return {
+                return None, None, None, {
                     "mode": "refused",
                     "answer": REFUSAL,
                     "refused": True,
@@ -270,7 +282,7 @@ def create_app(root: Path) -> FastAPI:
                     "SELECT 1 FROM files WHERE path = ?", (scope,)
                 ).fetchone()
                 if known is None:
-                    return {
+                    return scope, None, None, {
                         "mode": "refused",
                         "answer": REFUSAL,
                         "refused": True,
@@ -293,16 +305,23 @@ def create_app(root: Path) -> FastAPI:
         finally:
             conn.close()
 
-        payload = retrieval.to_dict()
         if retrieval.refused:
-            return {
+            return scope, retrieval, file_lines, {
                 "mode": "refused",
                 "answer": REFUSAL,
                 "refused": True,
                 "reason": retrieval.reason,
                 "scope": scope,
-                "retrieval": payload,
+                "retrieval": retrieval.to_dict(),
             }
+        return scope, retrieval, file_lines, None
+
+    def _ask_payload(body: AskBody) -> dict:
+        scope, retrieval, file_lines, error = _prepare(body)
+        if error is not None:
+            return error
+
+        payload = retrieval.to_dict()
 
         info = _model()
         if info is None:
@@ -329,7 +348,100 @@ def create_app(root: Path) -> FastAPI:
         response = result.to_dict()
         response["mode"] = "answer"
         response["scope"] = scope
+        response["top_k"] = body.top_k
         return response
+
+    @app.post("/api/ask/stream")
+    def ask_stream(body: AskBody):
+        """Same pipeline as /api/ask, emitted as server-sent events.
+
+        Events: ``meta`` (scope, retrieval, model), ``delta`` (answer text),
+        then ``done`` (the same payload /api/ask returns, plus ``ttft_ms`` and
+        ``elapsed_ms``). A refusal or model failure also ends with ``done``.
+        """
+        started = time.perf_counter()
+        scope, retrieval, file_lines, error = _prepare(body)
+        if error is not None:
+            error["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
+            error["ttft_ms"] = None
+            return StreamingResponse(
+                iter([_sse("done", error)]),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+            )
+
+        payload = retrieval.to_dict()
+        info = _model()
+        if info is None:
+            no_model = {
+                "mode": "no-model",
+                "message": NO_MODEL_MESSAGE,
+                "refused": False,
+                "scope": scope,
+                "retrieval": payload,
+                "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                "ttft_ms": None,
+            }
+            return StreamingResponse(
+                iter([_sse("done", no_model)]),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+            )
+
+        system, prompt = prompt_for(body.question, retrieval, scope=scope)
+        meta = {
+            "mode": "answer",
+            "scope": scope,
+            "retrieval": payload,
+            "model": info.summary(),
+            "top_k": body.top_k,
+        }
+
+        def events():
+            yield _sse("meta", meta)
+            first_at = None
+            parts: list[str] = []
+            try:
+                for delta in stream(system, prompt, info):
+                    if first_at is None:
+                        first_at = time.perf_counter()
+                    parts.append(delta)
+                    yield _sse("delta", {"text": delta})
+            except LLMUnavailable as exc:
+                yield _sse(
+                    "done",
+                    {
+                        "mode": "error",
+                        "error": f"Local model failed: {exc}",
+                        "scope": scope,
+                        "retrieval": payload,
+                        "top_k": body.top_k,
+                        "ttft_ms": _ms(first_at, started),
+                        "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                    },
+                )
+                return
+
+            result = finalize_answer(
+                body.question,
+                retrieval,
+                file_lines,
+                "".join(parts),
+                model=info,
+            )
+            done = result.to_dict()
+            done["mode"] = "answer"
+            done["scope"] = scope
+            done["top_k"] = body.top_k
+            done["ttft_ms"] = _ms(first_at, started)
+            done["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
+            yield _sse("done", done)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     @app.post("/api/ask")
     def ask(body: AskBody):

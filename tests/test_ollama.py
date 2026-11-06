@@ -132,3 +132,44 @@ def test_complete_can_disable_the_generation_cap(
     narrate.complete("system", "prompt", info)
 
     assert "num_predict" not in captured["options"]
+
+
+class _FakeStreamResponse:
+    def __init__(self, lines: list[bytes]) -> None:
+        self._lines = lines
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc) -> bool:
+        return False
+
+    def __iter__(self):
+        return iter(self._lines)
+
+
+def test_stream_yields_ollama_deltas_with_the_same_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from atlas import narrate
+
+    captured: dict = {}
+
+    def fake_stream(url, payload, timeout, headers=None):
+        captured["url"] = url
+        captured["payload"] = payload
+        return _FakeStreamResponse(
+            [
+                b'{"message":{"content":"hello "},"done":false}\n',
+                b'{"message":{"content":"world"},"done":true}\n',
+            ]
+        )
+
+    monkeypatch.delenv("ATLAS_MAX_TOKENS", raising=False)
+    monkeypatch.setattr(narrate, "_post_stream", fake_stream)
+    info = ModelInfo("ollama", "test-model", "http://127.0.0.1:11434")
+
+    assert list(narrate.stream("system", "prompt", info)) == ["hello ", "world"]
+    assert captured["url"].endswith("/api/chat")
+    assert captured["payload"]["stream"] is True
+    assert captured["payload"]["options"]["num_predict"] == 512

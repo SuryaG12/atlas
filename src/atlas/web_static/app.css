@@ -1136,6 +1136,7 @@ kbd {
   line-height: 1.68;
   color: var(--ink-2);
 }
+.answer-body.streaming { white-space: pre-wrap; }
 .answer-body > * + * { margin-top: 11px; }
 .answer-body h1,
 .answer-body h2,

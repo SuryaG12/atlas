@@ -8,6 +8,7 @@ itself lives in sessionStorage.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -186,6 +187,80 @@ def test_repo_wide_answer_keeps_the_standard_contract(repo: Path) -> None:
     assert "Answer the question" in seen["prompt"]
 
 
+def test_stream_scoped_ask_emits_tokens_then_the_final_payload(
+    client: TestClient, monkeypatch
+) -> None:
+    info = ModelInfo("fake", "fake-model", "http://127.0.0.1:9")
+    monkeypatch.setattr("atlas.web.detect_model", lambda timeout=None: info)
+    monkeypatch.setattr(
+        "atlas.web.stream",
+        lambda _system, _prompt, _info: iter(
+            ["`greet` calls ", "`shout` (`app/service.py:3-5`)."]
+        ),
+    )
+
+    response = client.post(
+        "/api/ask/stream",
+        json={
+            "question": "Explain this file.",
+            "path": "app/service.py",
+            "top_k": 3,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+
+    events: list[dict] = []
+    for block in response.text.strip().split("\n\n"):
+        event = "message"
+        data = ""
+        for line in block.splitlines():
+            if line.startswith("event:"):
+                event = line[6:].strip()
+            elif line.startswith("data:"):
+                data = line[5:].strip()
+        events.append({"event": event, "data": json.loads(data)})
+
+    assert [event["event"] for event in events] == [
+        "meta",
+        "delta",
+        "delta",
+        "done",
+    ]
+    assert events[0]["data"]["scope"] == "app/service.py"
+    assert events[0]["data"]["top_k"] == 3
+    assert events[1]["data"]["text"] == "`greet` calls "
+    assert events[2]["data"]["text"] == "`shout` (`app/service.py:3-5`)."
+
+    done = events[-1]["data"]
+    assert done["mode"] == "answer"
+    assert done["scope"] == "app/service.py"
+    assert done["top_k"] == 3
+    assert done["trusted"] is True
+    assert done["citations"]["valid"] == ["app/service.py:3-5"]
+    assert done["ttft_ms"] is not None
+    assert done["elapsed_ms"] >= 0
+
+
+def test_stream_refuses_unindexed_file_without_calling_the_model(
+    client: TestClient, monkeypatch
+) -> None:
+    def no_model(timeout=None):
+        raise AssertionError("an unindexed scope must refuse before the model")
+
+    monkeypatch.setattr("atlas.web.detect_model", no_model)
+
+    response = client.post(
+        "/api/ask/stream",
+        json={"question": "what is this?", "path": "missing/nope.py"},
+    )
+
+    assert response.status_code == 200
+    assert "event: done" in response.text
+    assert '"mode": "refused"' in response.text
+
+
 def test_scoped_ask_refuses_unindexed_file(client: TestClient, monkeypatch) -> None:
     def no_model(timeout=None):
         raise AssertionError("an unindexed scope must refuse before the model")
@@ -276,4 +351,7 @@ def test_session_cache_key_includes_scope() -> None:
     # not collide in sessionStorage.
     assert "function answerCacheKey(question, scope)" in source
     assert '${scope || "repo"}' in source
-    assert "JSON.stringify(scope ? { question, path: scope } : { question })" in source
+    # Ask and Explain stream the same scoped request body.
+    assert "/api/ask/stream" in source
+    assert "{ question, path: scope, top_k: ASK_TOP_K }" in source
+    assert "{ question, top_k: ASK_TOP_K }" in source

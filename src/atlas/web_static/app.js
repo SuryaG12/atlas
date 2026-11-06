@@ -26,6 +26,9 @@ const $ = (id) => document.getElementById(id);
 const HELP_KEY = "atlas.help.seen.v1";
 const ANSWER_CACHE_KEY = "atlas.answers.v1";
 const ANSWER_CACHE_LIMIT = 20;
+// Retrieval depth for Ask/Explain. Five keeps the recall@5 baseline; the
+// stream endpoint also accepts a top_k override for comparison runs.
+const ASK_TOP_K = 5;
 
 function setButtonLabel(button, text, ariaText) {
   const label = button.querySelector(".tool-label");
@@ -69,6 +72,64 @@ async function api(path, options) {
     throw new Error(detail);
   }
   return response.json();
+}
+
+function parseSseEvent(raw) {
+  let event = "message";
+  const data = [];
+  for (const line of raw.split("\n")) {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+  }
+  if (!data.length) return { event, data: null };
+  try {
+    return { event, data: JSON.parse(data.join("\n")) };
+  } catch (_err) {
+    return { event, data: null };
+  }
+}
+
+// Ask and Explain share /api/ask/stream. The server sends a meta event (scope,
+// retrieval, model), one delta per generated token, then a done payload that is
+// identical to /api/ask. Returning the done payload keeps citations, caching,
+// and rendering on the same path as the non-streaming fallback.
+async function apiStream(path, options, handlers) {
+  const response = await fetch(path, options);
+  if (!response.ok) {
+    let detail = response.statusText || `HTTP ${response.status}`;
+    try {
+      const body = await response.json();
+      if (body && body.detail) detail = body.detail;
+    } catch (_err) { /* keep status text */ }
+    throw new Error(detail);
+  }
+  if (!response.body) throw new Error("This browser cannot stream responses.");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let done = null;
+
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, { stream: true }).replace(/\r\n/g, "\n");
+    let cut = buffer.indexOf("\n\n");
+    while (cut >= 0) {
+      const raw = buffer.slice(0, cut);
+      buffer = buffer.slice(cut + 2);
+      const parsed = parseSseEvent(raw);
+      if (parsed.data) {
+        if (parsed.event === "meta" && handlers.onMeta) handlers.onMeta(parsed.data);
+        else if (parsed.event === "delta" && handlers.onDelta) {
+          handlers.onDelta(parsed.data.text || "");
+        } else if (parsed.event === "done") done = parsed.data;
+      }
+      cut = buffer.indexOf("\n\n");
+    }
+  }
+  if (!done) throw new Error("The stream ended before the answer was complete.");
+  return done;
 }
 
 // -- header ------------------------------------------------------------
@@ -835,10 +896,16 @@ function renderAnswer(payload, timing) {
     if (timing) {
       const span = document.createElement("span");
       span.className = timing.cached ? "mono cached-chip" : "mono";
-      span.textContent = timing.cached ? "cached" : formatDuration(timing.ms);
-      span.title = timing.cached
-        ? "Reused from this browser session; ask a different question to call the model"
-        : "Time from Ask to rendered answer";
+      if (timing.cached) {
+        span.textContent = "cached";
+        span.title = "Reused from this browser session; ask a different question to call the model";
+      } else if (timing.ttftMs != null) {
+        span.textContent = `${formatDuration(timing.ms)} · first ${formatDuration(timing.ttftMs)}`;
+        span.title = "Total time from Ask to rendered answer, then time to the first generated token";
+      } else {
+        span.textContent = formatDuration(timing.ms);
+        span.title = "Time from Ask to rendered answer";
+      }
       meta.append(span);
     }
     host.append(meta);
@@ -959,18 +1026,42 @@ async function ask(question, scope) {
     const elapsed = formatDuration(performance.now() - started);
     note.textContent = `${elapsed} · still local · a short question can still take a minute`;
   }, 1000);
+  let live = null;
+  let firstTokenMs = null;
+  const requestBody = scope
+    ? { question, path: scope, top_k: ASK_TOP_K }
+    : { question, top_k: ASK_TOP_K };
   try {
-    const payload = await api("/api/ask", {
+    const payload = await apiStream("/api/ask/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(scope ? { question, path: scope } : { question }),
+      body: JSON.stringify(requestBody),
+    }, {
+      onMeta(meta) {
+        if (meta.retrieval) renderChunks(meta.retrieval);
+        const chunks = (meta.retrieval && meta.retrieval.chunks || []).length;
+        note.textContent = `${formatDuration(performance.now() - started)} · ${chunks} chunks · generating locally`;
+      },
+      onDelta(text) {
+        if (!live) {
+          if (block.el.parentNode) block.el.remove();
+          live = document.createElement("div");
+          live.className = "answer-body streaming";
+          host.append(live);
+        }
+        if (firstTokenMs === null) firstTokenMs = performance.now() - started;
+        live.textContent += text;
+        host.scrollTop = host.scrollHeight;
+      },
     });
     writeAnswerCache(cacheKey, payload);
     const ms = performance.now() - started;
-    renderAnswer(payload, { cached: false, ms });
+    const ttft = firstTokenMs === null ? payload.ttft_ms : firstTokenMs;
+    renderAnswer(payload, { cached: false, ms, ttftMs: ttft });
+    const first = ttft == null ? "" : ` · first token in ${formatDuration(ttft)}`;
     status(payload.mode === "refused"
       ? `no answer found in ${formatDuration(ms)}`
-      : `answer ready in ${formatDuration(ms)}`);
+      : `answer ready in ${formatDuration(ms)}${first}`);
   } catch (err) {
     const failed = stateBlock("error", "request failed", err.message, { icon: "!" });
     resetAnswer().append(failed.el);
