@@ -38,6 +38,8 @@ STALE_GRAPH = "Graph index is out of date. Run `atlas index .` again."
 
 class AskBody(BaseModel):
     question: str = Field(min_length=1, max_length=500)
+    # Optional file scope: "explain this file" retrieves only that file's chunks.
+    path: str | None = Field(default=None, max_length=512)
     top_k: int = Field(default=8, ge=1, le=20)
     budget: int = Field(default=6000, ge=200, le=200000)
     min_score: float = Field(default=0.02, ge=0.0, le=1.0)
@@ -126,6 +128,15 @@ def _safe_relpath(value: str) -> str | None:
     if normalized.startswith("../") or normalized == ".." or normalized.startswith("/"):
         return None
     return normalized
+
+
+def _snippet(text: str, limit: int = 160) -> str:
+    """First meaningful line of a chunk, for a search result row."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped[:limit] + ("..." if len(stripped) > limit else "")
+    return ""
 
 
 def create_app(root: Path) -> FastAPI:
@@ -240,14 +251,40 @@ def create_app(root: Path) -> FastAPI:
         return payload
 
     def _ask_payload(body: AskBody) -> dict:
+        scope = None
+        if body.path:
+            scope = _safe_relpath(body.path)
+            if scope is None:
+                return {
+                    "mode": "refused",
+                    "answer": REFUSAL,
+                    "refused": True,
+                    "reason": f"not an indexed file: {body.path}",
+                    "scope": body.path,
+                    "retrieval": None,
+                }
         conn = _open()
         try:
+            if scope is not None:
+                known = conn.execute(
+                    "SELECT 1 FROM files WHERE path = ?", (scope,)
+                ).fetchone()
+                if known is None:
+                    return {
+                        "mode": "refused",
+                        "answer": REFUSAL,
+                        "refused": True,
+                        "reason": f"not an indexed file: {scope}",
+                        "scope": scope,
+                        "retrieval": None,
+                    }
             retrieval = retrieve(
                 conn,
                 body.question,
                 top_k=body.top_k,
                 budget=body.budget,
                 min_score=body.min_score,
+                scope=scope,
             )
             file_lines = {
                 row["path"]: row["lines"]
@@ -263,6 +300,7 @@ def create_app(root: Path) -> FastAPI:
                 "answer": REFUSAL,
                 "refused": True,
                 "reason": retrieval.reason,
+                "scope": scope,
                 "retrieval": payload,
             }
 
@@ -272,6 +310,7 @@ def create_app(root: Path) -> FastAPI:
                 "mode": "no-model",
                 "message": NO_MODEL_MESSAGE,
                 "refused": False,
+                "scope": scope,
                 "retrieval": payload,
             }
 
@@ -281,11 +320,13 @@ def create_app(root: Path) -> FastAPI:
             return {
                 "mode": "error",
                 "error": f"Local model failed: {exc}",
+                "scope": scope,
                 "retrieval": payload,
             }
 
         response = result.to_dict()
         response["mode"] = "answer"
+        response["scope"] = scope
         return response
 
     @app.post("/api/ask")
@@ -294,6 +335,42 @@ def create_app(root: Path) -> FastAPI:
         payload = _ask_payload(body)
         payload["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
         return payload
+
+    @app.get("/api/search")
+    def search(
+        q: str = Query(min_length=1, max_length=200),
+        limit: int = Query(default=12, ge=1, le=40),
+    ):
+        """Retrieval only: no model, no prompt, no generation.
+
+        This is the "where is X?" path. It reuses the same symbol/FTS/graph
+        lookup as Ask, so a hit here is a hit Ask would have seen.
+        """
+
+        started = time.perf_counter()
+        conn = _open()
+        try:
+            result = retrieve(conn, q, top_k=limit, budget=200000, min_score=0.0)
+        finally:
+            conn.close()
+        items = [
+            {
+                "path": chunk.path,
+                "name": chunk.name,
+                "kind": chunk.kind,
+                "start": chunk.start,
+                "end": chunk.end,
+                "score": round(chunk.score, 5),
+                "snippet": _snippet(chunk.text),
+            }
+            for chunk in result.chunks
+        ]
+        return {
+            "query": q,
+            "items": items,
+            "reason": "" if items else (result.reason or "no matches"),
+            "elapsed_ms": int((time.perf_counter() - started) * 1000),
+        }
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     return app

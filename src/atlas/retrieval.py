@@ -385,6 +385,7 @@ def retrieve(
     top_k: int = 8,
     budget: int = 6000,
     min_score: float = 0.02,
+    scope: str | None = None,
 ) -> RetrievalResult:
     tokens = extract_tokens(question)
     result = RetrievalResult(question=question, tokens=tokens)
@@ -396,8 +397,28 @@ def retrieve(
 
     rankings = {"symbol": symbol_ids, "fts": fts_ids, "graph": graph_ids}
     hits = fuse(rankings)
-    result.fused = hits
     result.exact_symbol_match = bool(exact)
+
+    # A scoped ask explains one file, so nothing outside that path may be used.
+    # The file itself is the context, which makes a weak lexical score
+    # meaningless: if the wording matches none of its chunks, fall back to the
+    # file's own chunks in reading order rather than returning nothing.
+    if scope is not None:
+        rows = list(
+            conn.execute("SELECT id, start_line FROM chunks WHERE path = ?", (scope,))
+        )
+        if not rows:
+            result.refused = True
+            result.reason = f"no indexed chunks in {scope}"
+            return result
+        allowed = {row["id"] for row in rows}
+        scoped = [hit for hit in hits if hit[0] in allowed]
+        if not scoped:
+            order = sorted(rows, key=lambda row: row["start_line"])
+            scoped = [(row["id"], 1.0, {"scope": 1}) for row in order]
+        hits = scoped
+
+    result.fused = hits
 
     if not hits:
         result.refused = True
@@ -405,7 +426,7 @@ def retrieve(
         return result
 
     result.best_score = hits[0][1]
-    if result.best_score < min_score and not exact:
+    if scope is None and result.best_score < min_score and not exact:
         result.refused = True
         result.reason = (
             f"best fused score {result.best_score:.4f} < {min_score:.4f}"

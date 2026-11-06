@@ -7,10 +7,18 @@ const state = {
   files: [],
   activePath: null,
   mapLevel: "file",
+  mapView: "list",
+  workTab: "editor",
   treeRows: [],
   treeDirs: [],
   filterTimer: 0,
   helpTrigger: null,
+  sourceDoc: null,
+  sourceRange: { start: 0, end: 0 },
+  findOpen: false,
+  findQuery: "",
+  findHits: [],
+  findIndex: -1,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -71,6 +79,7 @@ function renderStats(meta) {
   $("repo-name").textContent = name;
   $("repo-root").textContent = root;
   $("repo-root").title = root;
+  $("repo-chip").title = root;
   $("stat-files").textContent = Number(meta.files || 0).toLocaleString("en-US");
   $("stat-symbols").textContent = Number(meta.symbols || 0).toLocaleString("en-US");
   $("stat-edges").textContent = Number(meta.edges || 0).toLocaleString("en-US");
@@ -119,7 +128,7 @@ function renderTree(files) {
   const root = buildTree(files);
   const openAll = files.length <= 220;
   const fragment = document.createDocumentFragment();
-  renderTreeNode(root, 0, openAll, fragment, host);
+  renderTreeNode(root, 0, openAll, fragment);
   host.append(fragment);
   // Cache the row list and folder membership once per render. Filtering then
   // touches arrays instead of re-querying the DOM on every keystroke.
@@ -131,21 +140,22 @@ function renderTree(files) {
     el,
     rows: [...el.querySelectorAll(".tree-file")],
   }));
+  syncTreeFilterState();
 }
 
-function renderTreeNode(node, depth, openAll, parent, host) {
+function renderTreeNode(node, depth, openAll, parent) {
   const dirs = [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name));
   for (const dir of dirs) {
     const details = document.createElement("details");
     details.open = openAll || depth < 1;
     const summary = document.createElement("summary");
-    summary.style.paddingLeft = `${8 + depth * 12}px`;
+    summary.style.paddingLeft = `${7 + depth * 12}px`;
     const name = document.createElement("span");
     name.className = "tree-folder-name mono";
     name.textContent = dir.name;
     summary.append(name);
     details.append(summary);
-    renderTreeNode(dir, depth + 1, openAll, details, host);
+    renderTreeNode(dir, depth + 1, openAll, details);
     parent.append(details);
   }
   const files = node.files.slice().sort((a, b) => a.path.localeCompare(b.path));
@@ -175,17 +185,53 @@ function scheduleTreeFilter() {
   state.filterTimer = window.setTimeout(applyTreeFilter, 60);
 }
 
+// The count, clear button, and empty state all derive from the same pass, so
+// the number in the header always matches the rows a reader can see.
+function syncTreeFilterState(query, visible) {
+  const total = state.treeRows.length;
+  const active = typeof query === "string" ? query : $("tree-filter").value.trim();
+  const shown = typeof visible === "number" ? visible : total;
+  $("file-count").textContent = active ? `${shown} / ${total}` : `${total} indexed`;
+  const clear = $("tree-filter-clear");
+  if (clear) clear.hidden = active === "";
+  const empty = $("tree-empty");
+  if (!empty) return;
+  if (!total) {
+    empty.hidden = false;
+    $("tree-empty-text").textContent =
+      "No indexed files yet. Run the Atlas index for this folder, then reload.";
+    return;
+  }
+  if (active && shown === 0) {
+    empty.hidden = false;
+    $("tree-empty-text").textContent =
+      `Nothing in the tree matches "${active}". Try a shorter path or clear the filter.`;
+    return;
+  }
+  empty.hidden = true;
+}
+
 function applyTreeFilter() {
   window.clearTimeout(state.filterTimer);
   const query = $("tree-filter").value.trim().toLowerCase();
+  let visible = 0;
   for (const row of state.treeRows) {
-    row.el.hidden = query !== "" && !row.path.includes(query);
+    const show = query === "" || row.path.includes(query);
+    row.el.hidden = !show;
+    if (show) visible += 1;
   }
   for (const dir of state.treeDirs) {
     const hasVisible = dir.rows.some((row) => !row.hidden);
-    dir.el.hidden = !hasVisible;
+    dir.el.hidden = query !== "" && !hasVisible;
     if (query && hasVisible) dir.el.open = true;
   }
+  syncTreeFilterState(query, visible);
+}
+
+function clearTreeFilter() {
+  $("tree-filter").value = "";
+  applyTreeFilter();
+  $("tree-filter").focus();
 }
 
 function setActiveTreeRow(path) {
@@ -206,14 +252,99 @@ function setActiveTreeRow(path) {
 
 // -- source ------------------------------------------------------------
 
-function renderSource(data, start, end) {
+function scrollSourceToLine(lineNumber) {
   const host = $("source");
+  const line = host.querySelector(`.code-line[data-line="${lineNumber}"]`);
+  if (!line) return;
+  const top = line.getBoundingClientRect().top
+    - host.getBoundingClientRect().top
+    + host.scrollTop;
+  host.scrollTop = Math.max(0, top - host.clientHeight / 3);
+}
+
+function appendFindHits(span, text, query, marks) {
+  if (!query) {
+    span.textContent = text === "" ? " " : text;
+    return;
+  }
+  const hay = text.toLowerCase();
+  const needle = query.toLowerCase();
+  let cursor = 0;
+  let found = false;
+  while (cursor <= hay.length) {
+    const at = hay.indexOf(needle, cursor);
+    if (at === -1) break;
+    if (at > cursor) span.append(text.slice(cursor, at));
+    const mark = document.createElement("mark");
+    mark.className = "find-hit";
+    mark.textContent = text.slice(at, at + needle.length);
+    span.append(mark);
+    marks.push(mark);
+    cursor = at + needle.length;
+    found = true;
+    if (marks.length >= 500) break;
+  }
+  if (cursor < text.length) span.append(text.slice(cursor));
+  if (!found) span.textContent = text === "" ? " " : text;
+}
+
+function updateFindCount() {
+  const el = $("editor-find-count");
+  if (!el) return;
+  const total = state.findHits.length;
+  const query = state.findQuery.trim();
+  el.classList.remove("has-hits", "no-hits");
+  if (!query) {
+    el.textContent = "0 / 0";
+    return;
+  }
+  if (total === 0) {
+    el.textContent = "no matches";
+    el.classList.add("no-hits");
+    return;
+  }
+  const index = Math.max(0, state.findIndex);
+  el.textContent = `${index + 1} / ${total}`;
+  el.classList.add("has-hits");
+}
+
+function setCurrentFindHit(index, scroll) {
+  if (!state.findHits.length) {
+    state.findIndex = -1;
+    updateFindCount();
+    return;
+  }
+  const next = ((index % state.findHits.length) + state.findHits.length)
+    % state.findHits.length;
+  state.findIndex = next;
+  for (const mark of state.findHits) mark.classList.remove("current");
+  const mark = state.findHits[next];
+  mark.classList.add("current");
+  updateFindCount();
+  if (scroll) {
+    const row = mark.closest(".code-line");
+    if (row) scrollSourceToLine(Number(row.dataset.line));
+  }
+}
+
+// Rendering and finding share one pass: the source is rebuilt with the current
+// query marked, then the current hit is scrolled into view. That keeps the
+// count, the highlights, and the visible line in sync at every step.
+function paintSource(options) {
+  const host = $("source");
+  const data = state.sourceDoc;
+  if (!data) return;
+  const opts = options || {};
+  const { start, end } = state.sourceRange;
+  const low = start ? Math.max(1, start) : 0;
+  const high = end ? Math.max(end, low) : low;
+  const query = state.findQuery;
+  const marks = [];
+
   host.textContent = "";
   const wrap = document.createElement("div");
   wrap.className = "code";
   const fragment = document.createDocumentFragment();
-  const low = start ? Math.max(1, start) : 0;
-  const high = end ? Math.max(end, low) : low;
   for (let i = 0; i < data.lines.length; i += 1) {
     const number = i + 1;
     const row = document.createElement("div");
@@ -225,23 +356,84 @@ function renderSource(data, start, end) {
     ln.textContent = String(number);
     const lc = document.createElement("span");
     lc.className = "lc";
-    lc.textContent = data.lines[i] === "" ? " " : data.lines[i];
+    appendFindHits(lc, data.lines[i], query.trim(), marks);
     row.append(ln, lc);
     fragment.append(row);
   }
   wrap.append(fragment);
   host.append(wrap);
 
-  if (low) {
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      const line = host.querySelector(`.code-line[data-line="${low}"]`);
-      if (!line) return;
-      const top = line.getBoundingClientRect().top
-        - host.getBoundingClientRect().top
-        + host.scrollTop;
-      host.scrollTop = Math.max(0, top - host.clientHeight / 3);
-    }));
+  state.findHits = marks;
+  if (query.trim() && marks.length) {
+    if (state.findIndex < 0 || state.findIndex >= marks.length) state.findIndex = 0;
+    setCurrentFindHit(state.findIndex, opts.scrollToCurrent !== false);
+  } else {
+    state.findIndex = -1;
+    updateFindCount();
   }
+
+  if (!query.trim() && low) {
+    requestAnimationFrame(() => requestAnimationFrame(() => scrollSourceToLine(low)));
+  }
+}
+
+function renderSource(data, start, end) {
+  state.sourceDoc = data;
+  state.sourceRange = { start: start || 0, end: end || 0 };
+  if (!state.findOpen) {
+    state.findQuery = "";
+    state.findHits = [];
+    state.findIndex = -1;
+  }
+  paintSource({ scrollToCurrent: true });
+}
+
+function setEditorFindOpen(open) {
+  const bar = $("editor-find");
+  const toggle = $("editor-find-toggle");
+  if (!bar || !toggle) return;
+  if (open && !state.activePath) {
+    status("open a file first, then use find", true);
+    return;
+  }
+  state.findOpen = open;
+  bar.hidden = !open;
+  toggle.setAttribute("aria-expanded", String(open));
+  if (open) {
+    const input = $("editor-find-input");
+    input.value = state.findQuery;
+    input.focus();
+    input.select();
+    if (state.findQuery) {
+      state.findIndex = 0;
+      paintSource({ scrollToCurrent: true });
+    }
+  } else {
+    const input = $("editor-find-input");
+    input.value = "";
+    state.findQuery = "";
+    state.findHits = [];
+    state.findIndex = -1;
+    updateFindCount();
+    paintSource({ scrollToCurrent: false });
+    $("source").focus({ preventScroll: true });
+  }
+}
+
+function applyEditorFind(raw) {
+  state.findQuery = String(raw || "");
+  state.findIndex = 0;
+  paintSource({ scrollToCurrent: true });
+}
+
+function stepEditorFind(step) {
+  if (!state.findHits.length) {
+    if (state.findQuery.trim()) {
+      status(`no matches for "${state.findQuery.trim()}" in this file`, true);
+    }
+    return;
+  }
+  setCurrentFindHit(state.findIndex + step, true);
 }
 
 async function openFile(path, start, end) {
@@ -251,16 +443,28 @@ async function openFile(path, start, end) {
     const data = await api(`/api/file?path=${encodeURIComponent(path)}`);
     state.activePath = path;
     setActiveTreeRow(path);
-    renderSource(data, start, end);
+    setWorkTab("editor");
+    const explain = $("explain-file");
+    explain.hidden = false;
+    explain.title = `Ask about ${path} only, using its own code`;
+    $("editor-find-toggle").disabled = false;
     $("source-title").textContent = path;
+    $("source-title").title = path;
     $("source-meta").textContent = [
       data.language,
       `${data.total_lines} lines`,
-      "live",
+      "live from disk",
       data.truncated ? "truncated" : "",
     ].filter(Boolean).join(" / ");
     $("source-meta").title =
       "Read from disk now. The file tree and the top stats come from the last index run.";
+    const fileState = $("file-state");
+    if (fileState) {
+      fileState.textContent = "ready";
+      fileState.classList.add("ready");
+      fileState.title = "File loaded from disk; Atlas never writes to it";
+    }
+    renderSource(data, start, end);
     if (start) {
       status(`${path}:${start}${end && end !== start ? `-${end}` : ""}`);
     } else {
@@ -455,23 +659,30 @@ function chunkLocation(chunk) {
 }
 
 function retrievalDetails(retrieval) {
-  const details = document.createElement("details");
-  details.className = "chunks";
-  const summary = document.createElement("summary");
+  const wrap = document.createElement("div");
+  wrap.className = "chunk-wrap";
   const chunks = (retrieval && retrieval.chunks) || [];
   const sources = (retrieval && retrieval.sources) || {};
   const sourceCounts = ["symbol", "fts", "graph"]
     .map((key) => `${key} ${(sources[key] || []).length}`)
     .join(" / ");
-  summary.textContent = `retrieved chunks (${chunks.length}) - ${sourceCounts}`;
-  details.append(summary);
+  const summary = document.createElement("div");
+  summary.className = "chunk-summary";
+  const label = document.createElement("span");
+  label.textContent = retrieval ? `${chunks.length} retrieved` : "no retrieval";
+  const modes = document.createElement("span");
+  modes.textContent = retrieval ? sourceCounts : "ask to populate";
+  summary.append(label, modes);
+  wrap.append(summary);
 
   if (chunks.length === 0) {
     const empty = document.createElement("p");
-    empty.className = "hint";
-    empty.textContent = "No chunks passed the retrieval threshold.";
-    details.append(empty);
-    return details;
+    empty.className = "state-body state-body-dim";
+    empty.textContent = retrieval
+      ? "No chunks passed the retrieval threshold."
+      : "Citations appear here after an answer.";
+    wrap.append(empty);
+    return wrap;
   }
 
   const list = document.createElement("ol");
@@ -481,7 +692,7 @@ function retrievalDetails(retrieval) {
     row.className = "chunk-row";
     const idx = document.createElement("span");
     idx.className = "idx";
-    idx.textContent = String(position + 1);
+    idx.textContent = String(position + 1).padStart(2, "0");
     const where = document.createElement("button");
     where.type = "button";
     where.className = "where cite";
@@ -499,8 +710,54 @@ function retrievalDetails(retrieval) {
     row.append(idx, where, sym, ranks);
     list.append(row);
   });
-  details.append(list);
-  return details;
+  wrap.append(list);
+  return wrap;
+}
+
+// Citation chunks live in the right detail pane, not under the answer, so the
+// answer stays readable and every retrieved path:line is still one click away.
+function resetChunks() {
+  const host = $("chunks");
+  if (!host) return null;
+  host.textContent = "";
+  const count = $("chunk-count");
+  if (count) count.textContent = "0";
+  return host;
+}
+
+function renderChunks(retrieval) {
+  const host = resetChunks();
+  if (!host) return;
+  const count = $("chunk-count");
+  if (count) count.textContent = String(((retrieval && retrieval.chunks) || []).length);
+  host.append(retrievalDetails(retrieval));
+}
+
+// -- state components --------------------------------------------------
+
+// One block shape for idle, loading, cached, refusal, warn, no-model and error.
+// The answer renderers build these instead of bare paragraphs, so no state can
+// fall back to the old layout.
+function stateBlock(tone, label, body, options) {
+  const opts = options || {};
+  const el = document.createElement("div");
+  el.className = `state state--${tone}`;
+  el.setAttribute("role", opts.role || "status");
+  const icon = document.createElement("span");
+  icon.className = "state-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = opts.icon || "";
+  const copy = document.createElement("div");
+  copy.className = "state-copy";
+  const heading = document.createElement("p");
+  heading.className = "state-label";
+  heading.textContent = label;
+  const text = document.createElement("p");
+  text.className = "state-body";
+  text.textContent = body;
+  copy.append(heading, text);
+  el.append(icon, copy);
+  return { el, copy, body: text };
 }
 
 // -- answers -----------------------------------------------------------
@@ -509,13 +766,26 @@ function resetAnswer() {
   const host = $("answer");
   host.textContent = "";
   host.scrollTop = 0;
+  host.removeAttribute("aria-busy");
   return host;
+}
+
+function scopeChip(payload) {
+  const chip = document.createElement("span");
+  chip.className = payload.scope ? "mono scope-chip file" : "mono scope-chip repo";
+  chip.textContent = payload.scope ? `${payload.scope} only` : "repo · all files";
+  chip.title = payload.scope
+    ? "This answer used only chunks from the open file"
+    : "This answer used chunks from the whole repository";
+  return chip;
 }
 
 function renderAnswer(payload, timing) {
   const host = resetAnswer();
+
   if (payload.mode === "answer") {
     const body = document.createElement("div");
+    body.className = "answer-body";
     const citations = (payload.citations && payload.citations.valid) || [];
     body.innerHTML = markdown(payload.answer, citations);
     host.append(body);
@@ -524,27 +794,33 @@ function renderAnswer(payload, timing) {
     // cannot drift apart.
     const linkCount = body.querySelectorAll("a.cite").length;
 
-    if (linkCount === 0) {
-      const warn = document.createElement("div");
-      warn.className = "warn";
-      warn.textContent = "No validated citations in this answer.";
-      host.append(warn);
-    }
-
     const invalid = (payload.citations && payload.citations.invalid) || [];
-    if (invalid.length) {
-      const list = document.createElement("ul");
-      list.className = "invalid-list";
-      for (const issue of invalid) {
-        const item = document.createElement("li");
-        item.textContent = `removed ${issue.citation}: ${issue.reason}`;
-        list.append(item);
+    if (linkCount === 0 || invalid.length) {
+      const tone = linkCount === 0 ? "warn" : "warn";
+      const block = stateBlock(
+        tone,
+        "citation check",
+        linkCount === 0
+          ? "No validated citations in this answer. Treat it as ungrounded until you find the code yourself."
+          : "Some citations were removed because they did not match the index.",
+        { icon: "!" },
+      );
+      if (invalid.length) {
+        const list = document.createElement("ul");
+        list.className = "state-list";
+        for (const issue of invalid) {
+          const item = document.createElement("li");
+          item.textContent = `removed ${issue.citation}: ${issue.reason}`;
+          list.append(item);
+        }
+        block.copy.append(list);
       }
-      host.append(list);
+      host.append(block.el);
     }
 
     const meta = document.createElement("div");
     meta.className = "answer-meta";
+    meta.append(scopeChip(payload));
     const model = payload.model ? `${payload.model.provider}/${payload.model.model}` : "local model";
     for (const text of [
       `${(payload.retrieval && payload.retrieval.chunks || []).length} chunks`,
@@ -558,7 +834,7 @@ function renderAnswer(payload, timing) {
     }
     if (timing) {
       const span = document.createElement("span");
-      span.className = "mono";
+      span.className = timing.cached ? "mono cached-chip" : "mono";
       span.textContent = timing.cached ? "cached" : formatDuration(timing.ms);
       span.title = timing.cached
         ? "Reused from this browser session; ask a different question to call the model"
@@ -566,52 +842,62 @@ function renderAnswer(payload, timing) {
       meta.append(span);
     }
     host.append(meta);
-    host.append(retrievalDetails(payload.retrieval));
+    renderChunks(payload.retrieval);
     return;
   }
 
   if (payload.mode === "refused") {
-    const refusal = document.createElement("p");
-    refusal.className = "refusal";
-    refusal.textContent = payload.answer || "I couldn't find that in this repo.";
-    host.append(refusal);
+    const block = stateBlock(
+      "refusal",
+      "no grounded answer",
+      payload.answer || "I couldn't find that in this repo.",
+      { icon: "!" },
+    );
     if (payload.reason) {
-      const hint = document.createElement("p");
-      hint.className = "hint";
-      hint.textContent = payload.reason;
-      host.append(hint);
+      const reason = document.createElement("p");
+      reason.className = "state-body state-body-dim";
+      reason.textContent = payload.reason;
+      block.copy.append(reason);
     }
-    host.append(retrievalDetails(payload.retrieval));
+    host.append(block.el);
+    if (payload.retrieval) renderChunks(payload.retrieval);
     return;
   }
 
   if (payload.mode === "no-model") {
-    const notice = document.createElement("p");
-    notice.className = "notice";
-    notice.textContent = payload.message;
-    host.append(notice);
+    const block = stateBlock(
+      "no-model",
+      "local model offline",
+      payload.message,
+      { icon: "-" },
+    );
     const hint = document.createElement("p");
-    hint.className = "hint";
-    hint.textContent = "Retrieval still works. Start a local model for written answers.";
-    host.append(hint);
-    host.append(retrievalDetails(payload.retrieval));
+    hint.className = "state-body state-body-dim";
+    hint.textContent = "Instant search and the file tree still work. Start a local model for written answers.";
+    block.copy.append(hint);
+    host.append(block.el);
+    if (payload.retrieval) renderChunks(payload.retrieval);
     return;
   }
 
-  const error = document.createElement("p");
-  error.className = "error";
-  error.textContent = payload.error || payload.message || "Something went wrong.";
-  host.append(error);
-  if (payload.retrieval) host.append(retrievalDetails(payload.retrieval));
+  const block = stateBlock(
+    "error",
+    "request failed",
+    payload.error || payload.message || "Something went wrong.",
+    { icon: "!" },
+  );
+  host.append(block.el);
+  if (payload.retrieval) renderChunks(payload.retrieval);
 }
 
-// Answers are cached per question for this browser session. Asking the same
-// thing twice is instant; a new question still calls the local model.
-function answerCacheKey(question) {
+// Answers are cached per question for this browser session. A file-scoped
+// answer is cached separately for each file, so opening another file cannot
+// reuse the wrong context. Asking the same thing twice is instant.
+function answerCacheKey(question, scope) {
   const model = state.meta && state.meta.model
     ? `${state.meta.model.provider}/${state.meta.model.model}`
     : "no-model";
-  return `${model}::${question.trim().toLowerCase()}`;
+  return `${model}::${scope || "repo"}::${question.trim().toLowerCase()}`;
 }
 
 function readAnswerCache(key) {
@@ -638,35 +924,46 @@ function writeAnswerCache(key, payload) {
   }
 }
 
-async function ask(question) {
-  const cacheKey = answerCacheKey(question);
+async function ask(question, scope) {
+  const cacheKey = answerCacheKey(question, scope);
   const cached = readAnswerCache(cacheKey);
   if (cached) {
     renderAnswer(cached, { cached: true, ms: 0 });
-    status("cached answer - same question, no model call");
+    status(scope
+      ? `cached answer for ${scope} - same file and question, no model call`
+      : "cached answer - same question, no model call");
     return;
   }
 
-  const button = $("ask-button");
+  const button = scope ? $("explain-file") : $("ask-button");
   button.disabled = true;
   const host = resetAnswer();
   host.setAttribute("aria-busy", "true");
-  const pending = document.createElement("p");
-  pending.className = "hint";
-  pending.textContent = "searching the index, then asking the local model...";
-  host.append(pending);
-  status("asking...");
+  resetChunks();
+  const block = stateBlock(
+    "pending",
+    scope ? "explaining this file" : "asking the repo",
+    scope
+      ? `Reading ${scope}, then asking the local model about that file only.`
+      : "Searching the index, then asking the local model across files.",
+    { icon: "" },
+  );
+  const note = document.createElement("p");
+  note.className = "state-body state-body-dim";
+  note.textContent = "0.0s · local model · nothing leaves this machine";
+  block.copy.append(note);
+  host.append(block.el);
+  status(scope ? `explaining ${scope}...` : "asking...");
   const started = performance.now();
   const timer = window.setInterval(() => {
     const elapsed = formatDuration(performance.now() - started);
-    pending.textContent = "searching the index, then asking the local model... "
-      + `${elapsed}. A short question can still take a minute.`;
+    note.textContent = `${elapsed} · still local · a short question can still take a minute`;
   }, 1000);
   try {
     const payload = await api("/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(scope ? { question, path: scope } : { question }),
     });
     writeAnswerCache(cacheKey, payload);
     const ms = performance.now() - started;
@@ -675,7 +972,9 @@ async function ask(question) {
       ? `no answer found in ${formatDuration(ms)}`
       : `answer ready in ${formatDuration(ms)}`);
   } catch (err) {
-    resetAnswer().innerHTML = `<p class="error">${escapeHtml(err.message)}</p>`;
+    const failed = stateBlock("error", "request failed", err.message, { icon: "!" });
+    resetAnswer().append(failed.el);
+    resetChunks();
     status(err.message, true);
   } finally {
     window.clearInterval(timer);
@@ -684,13 +983,187 @@ async function ask(question) {
   }
 }
 
+// "Explain this file" is the scoped counterpart to repo-wide Ask: the same
+// answer pipeline and the same validated citations, but retrieval may only use
+// chunks from the open file.
+const EXPLAIN_FILE_QUESTION = "Explain this file.";
+
+async function explainFile() {
+  const scope = state.activePath;
+  if (!scope) {
+    status("open a file first, then choose Explain this file", true);
+    return;
+  }
+  // The answer renders in the Ask tab, so bring that panel forward.
+  setWorkTab("ask");
+  await ask(EXPLAIN_FILE_QUESTION, scope);
+}
+
+// -- instant find ------------------------------------------------------
+// Retrieval only: /api/search never calls the model, so this is the "where is
+// X?" path and returns in milliseconds. Rows reuse openFile(), exactly like a
+// validated citation, so every result lands on real lines.
+
+let findTimer = 0;
+let findSeq = 0;
+
+function setFindExpanded(expanded) {
+  const input = $("find-input");
+  if (input) input.setAttribute("aria-expanded", String(expanded));
+}
+
+function hideFindResults() {
+  window.clearTimeout(findTimer);
+  const host = $("find-results");
+  host.hidden = true;
+  host.textContent = "";
+  setFindExpanded(false);
+}
+
+function findRow(item, position) {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "find-row";
+  row.dataset.path = item.path;
+  row.dataset.start = String(item.start);
+  row.dataset.end = String(item.end);
+  row.title = `Open ${item.path}:${item.start}-${item.end}`;
+  const num = document.createElement("span");
+  num.className = "find-num";
+  num.textContent = String(position + 1).padStart(2, "0");
+  const where = document.createElement("span");
+  where.className = "find-where mono";
+  where.textContent = `${item.path}:${item.start}-${item.end}`;
+  const kind = document.createElement("span");
+  kind.className = "find-kind mono";
+  kind.textContent = item.kind || "match";
+  const name = document.createElement("span");
+  name.className = "find-name";
+  name.textContent = item.name;
+  const snippet = document.createElement("span");
+  snippet.className = "find-snippet mono";
+  snippet.textContent = item.snippet;
+  row.append(num, where, kind, name, snippet);
+  return row;
+}
+
+function renderFindResults(data) {
+  const host = $("find-results");
+  host.hidden = false;
+  host.textContent = "";
+  setFindExpanded(true);
+  const head = document.createElement("div");
+  head.className = "find-head";
+  const count = document.createElement("span");
+  count.textContent = data.items.length
+    ? `${data.items.length} match${data.items.length === 1 ? "" : "es"}`
+    : "no matches";
+  const mode = document.createElement("span");
+  mode.className = "find-head-mode";
+  mode.textContent = `${data.elapsed_ms} ms / index only / no model`;
+  head.append(count, mode);
+  host.append(head);
+
+  if (!data.items.length) {
+    const hint = document.createElement("p");
+    hint.className = "find-empty";
+    hint.textContent = data.reason || "Try a symbol name or a distinctive word.";
+    host.append(hint);
+    return;
+  }
+
+  data.items.forEach((item, index) => host.append(findRow(item, index)));
+
+  const query = $("find-input").value.trim();
+  const ask = document.createElement("button");
+  ask.type = "button";
+  ask.className = "find-ask";
+  ask.dataset.ask = "1";
+  const mark = document.createElement("span");
+  mark.className = "find-ask-mark";
+  mark.textContent = "?";
+  const copy = document.createElement("span");
+  copy.className = "find-ask-copy";
+  const title = document.createElement("span");
+  title.className = "find-ask-title";
+  title.textContent = `Ask the local model about "${query}"`;
+  const sub = document.createElement("span");
+  sub.className = "find-ask-sub";
+  sub.textContent = "slower path / can take a minute / citations still checked";
+  copy.append(title, sub);
+  const cta = document.createElement("span");
+  cta.className = "find-ask-cta";
+  cta.textContent = "ask \u2192";
+  ask.append(mark, copy, cta);
+  host.append(ask);
+}
+
+async function runFind(raw) {
+  const query = String(raw || "").trim();
+  if (!query) {
+    hideFindResults();
+    return;
+  }
+  const seq = ++findSeq;
+  const host = $("find-results");
+  host.hidden = false;
+  host.textContent = "";
+  setFindExpanded(true);
+  const pending = document.createElement("p");
+  pending.className = "find-empty";
+  pending.textContent = "searching the index / no model...";
+  host.append(pending);
+  try {
+    const data = await api(`/api/search?q=${encodeURIComponent(query)}`);
+    if (seq !== findSeq) return;
+    renderFindResults(data);
+    status(data.items.length
+      ? `${data.items.length} matches in ${data.elapsed_ms} ms - retrieval only`
+      : `no matches for "${query}"`);
+  } catch (err) {
+    if (seq !== findSeq) return;
+    host.textContent = "";
+    const failed = document.createElement("p");
+    failed.className = "find-empty error";
+    failed.textContent = err.message;
+    host.append(failed);
+    status(err.message, true);
+  }
+}
+
+function askFromSearch() {
+  const raw = $("find-input").value.trim();
+  if (!raw) {
+    $("find-input").focus();
+    status("type what you want to ask about first");
+    return;
+  }
+  const question = raw.endsWith("?") || /\s/.test(raw)
+    ? raw
+    : `Where is ${raw}?`;
+  hideFindResults();
+  setWorkTab("ask");
+  const input = $("ask-input");
+  input.value = question;
+  input.focus();
+  input.select();
+  status("moved to Ask - local model can take a minute; press ask to run");
+}
+
+function focusFindRow(step) {
+  const rows = [...$("find-results").querySelectorAll(".find-row, .find-ask")];
+  if (!rows.length) return;
+  const current = rows.indexOf(document.activeElement);
+  let next;
+  if (current === -1) next = step > 0 ? 0 : rows.length - 1;
+  else next = (current + step + rows.length) % rows.length;
+  rows[next].focus();
+}
+
 // -- module graph ------------------------------------------------------
 
-// The map is drawn here rather than by a rendering library. The previous
-// build shipped a 2.5 MB vendored Mermaid bundle and recovered its output by
-// parsing generated element ids; when that single script failed to arrive the
-// pane only said "Mermaid failed to load" and the whole map was lost. Layout
-// now comes from /api/map alone: no third-party runtime, no CDN, one JSON call.
+// The map is drawn here rather than by a rendering library. Layout comes from
+// /api/map alone: no third-party runtime, no CDN, one JSON call.
 
 const MAP_NODE_H = 42;
 const MAP_GAP_X = 56;
@@ -728,6 +1201,36 @@ function mapDepths(nodes, parents) {
   return depth;
 }
 
+// Order each column by the mean row of its parents (a barycenter pass). Two
+// sweeps are enough to pull most edges into short, non-crossing runs.
+function mapColumns(nodes, parents, depth) {
+  const columns = [];
+  nodes.forEach((node, i) => {
+    if (!columns[depth[i]]) columns[depth[i]] = [];
+    columns[depth[i]].push(i);
+  });
+  columns.forEach((members) => members.sort((a, b) => nodes[a].key.localeCompare(nodes[b].key)));
+  const rowOf = new Map();
+  const assign = () => columns.forEach((members) => {
+    members.forEach((i, row) => rowOf.set(i, row));
+  });
+  assign();
+  for (let pass = 0; pass < 3; pass += 1) {
+    for (let c = 1; c < columns.length; c += 1) {
+      columns[c].sort((a, b) => {
+        const mean = (i) => {
+          const list = parents[i];
+          if (!list || !list.length) return rowOf.get(i) || 0;
+          return list.reduce((sum, p) => sum + (rowOf.get(p) || 0), 0) / list.length;
+        };
+        return mean(a) - mean(b) || nodes[a].key.localeCompare(nodes[b].key);
+      });
+      columns[c].forEach((i, row) => rowOf.set(i, row));
+    }
+  }
+  return columns;
+}
+
 function mapNodeWidth(node) {
   return Math.min(320, Math.max(150, 26 + node.key.length * 6.6));
 }
@@ -743,10 +1246,12 @@ function svgNode(name, attrs) {
   return el;
 }
 
-function setGraphHelp(text) {
+function setGraphHelp(text, detail) {
   const help = $("graph-help");
-  const lead = help && help.firstElementChild;
+  if (!help) return;
+  const [lead, dim] = help.querySelectorAll("span");
   if (lead) lead.textContent = text;
+  if (dim) dim.textContent = detail || "";
 }
 
 // A package node has no file of its own, so open the first indexed file that
@@ -768,20 +1273,63 @@ function attachMapActivation(element, path) {
   });
 }
 
+// Edges are orthogonal and rounded, not free-form curves: a dependency leaves
+// the right edge of its box, runs down a gutter, and enters the next column.
+// Deduplicating pairs removes the parallel strands that made the old map read
+// as a web. Hovering or focusing a node dims everything unrelated.
+function mapElbow(x1, y1, x2, y2) {
+  if (Math.abs(y2 - y1) < 1) return `M${x1},${y1} H${x2}`;
+  const mid = x1 + Math.max(18, (x2 - x1) / 2);
+  const dir = y2 > y1 ? 1 : -1;
+  return `M${x1},${y1} H${mid - 5} Q${mid},${y1} ${mid},${y1 + 5 * dir}`
+    + ` V${y2 - 5 * dir} Q${mid},${y2} ${mid + 5},${y2} H${x2}`;
+}
+
+function clearMapFocus() {
+  const graph = $("graph");
+  if (!graph) return;
+  graph.classList.remove("has-focus");
+  graph.querySelectorAll(".map-node.is-lit").forEach((node) => node.classList.remove("is-lit"));
+  graph.querySelectorAll(".map-node.is-dim").forEach((node) => node.classList.remove("is-dim"));
+  graph.querySelectorAll(".map-edge.is-lit").forEach((edge) => edge.classList.remove("is-lit"));
+}
+
+function wireMapFocus(host, key, neighborKeys) {
+  const graph = $("graph");
+  const nodeGroups = [...host.querySelectorAll(".map-node")];
+  const edgePaths = [...host.querySelectorAll(".map-edge")];
+  const enter = () => {
+    graph.classList.add("has-focus");
+    for (const group of nodeGroups) {
+      group.classList.toggle("is-lit", group.dataset.key === key);
+      group.classList.toggle("is-dim", !neighborKeys.has(group.dataset.key));
+    }
+    for (const edge of edgePaths) {
+      edge.classList.toggle("is-lit", edge.dataset.src === key || edge.dataset.dst === key);
+    }
+  };
+  const leave = () => {
+    graph.classList.remove("has-focus");
+    for (const group of nodeGroups) group.classList.remove("is-lit", "is-dim");
+    for (const edge of edgePaths) edge.classList.remove("is-lit");
+  };
+  const group = host.querySelector(`.map-node[data-key="${CSS.escape(key)}"]`);
+  if (!group) return;
+  group.addEventListener("pointerenter", enter);
+  group.addEventListener("pointerleave", leave);
+  group.addEventListener("focus", enter);
+  group.addEventListener("blur", leave);
+}
+
 function renderMapSvg(host, data) {
   const parents = mapAdjacency(data.nodes, data.edges);
   const depth = mapDepths(data.nodes, parents);
-  const columns = [];
-  data.nodes.forEach((node, i) => {
-    if (!columns[depth[i]]) columns[depth[i]] = [];
-    columns[depth[i]].push(i);
-  });
+  const columns = mapColumns(data.nodes, parents, depth);
 
   const width = Math.max(150, ...data.nodes.map(mapNodeWidth));
   const placed = new Array(data.nodes.length);
   let height = 0;
   columns.forEach((members, column) => {
-    members.sort((a, b) => data.nodes[a].key.localeCompare(data.nodes[b].key));
     members.forEach((i, row) => {
       placed[i] = {
         x: MAP_PAD + column * (width + MAP_GAP_X),
@@ -803,21 +1351,36 @@ function renderMapSvg(host, data) {
 
   const index = new Map(data.nodes.map((node, i) => [node.key, i]));
   const edgeLayer = svgNode("g", { class: "map-edges" });
+  const seen = new Set();
   for (const edge of data.edges || []) {
     const from = index.get(edge.src);
     const to = index.get(edge.dst);
     if (from === undefined || to === undefined || from === to) continue;
+    const pair = `${edge.src}\u0000${edge.dst}`;
+    if (seen.has(pair)) continue;
+    seen.add(pair);
     const x1 = placed[from].x + width;
     const y1 = placed[from].y + MAP_NODE_H / 2;
     const x2 = placed[to].x;
     const y2 = placed[to].y + MAP_NODE_H / 2;
-    const mid = (x1 + x2) / 2;
     edgeLayer.append(svgNode("path", {
-      d: `M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`,
+      d: mapElbow(x1, y1, x2, y2),
       class: "map-edge",
+      "data-src": edge.src,
+      "data-dst": edge.dst,
     }));
   }
   svg.append(edgeLayer);
+
+  const neighbors = new Map();
+  const link = (a, b) => {
+    if (!neighbors.has(a)) neighbors.set(a, new Set([a]));
+    neighbors.get(a).add(b);
+  };
+  for (const edge of data.edges || []) {
+    link(edge.src, edge.dst);
+    link(edge.dst, edge.src);
+  }
 
   const nodeLayer = svgNode("g", { class: "map-nodes" });
   let linked = 0;
@@ -827,6 +1390,7 @@ function renderMapSvg(host, data) {
     const group = svgNode("g", {
       class: target ? "map-node" : "map-node static",
       transform: `translate(${spot.x}, ${spot.y})`,
+      "data-key": node.key,
     });
     const caption = svgNode("title", {});
     caption.textContent = target ? `${node.key} - open file` : node.key;
@@ -842,7 +1406,7 @@ function renderMapSvg(host, data) {
     group.append(svgNode("rect", {
       width: width,
       height: MAP_NODE_H,
-      rx: 8,
+      rx: 6,
       class: "map-node-box",
     }));
     const name = svgNode("text", { class: "map-node-name", x: 12, y: 18 });
@@ -860,37 +1424,78 @@ function renderMapSvg(host, data) {
   host.append(svg);
   host.scrollTop = 0;
   host.scrollLeft = 0;
+
+  // Wire focus after the nodes exist in the document.
+  for (const node of data.nodes) {
+    wireMapFocus(host, node.key, neighbors.get(node.key) || new Set([node.key]));
+  }
   return linked;
 }
 
-// Last resort: if the SVG pass throws for any reason the pane still shows
-// node/edge counts and every entry is still a working link to its file.
-function renderMapList(host, data) {
+// The list is the default module view: 32 file nodes and 53 import edges make
+// a crossing-heavy drawing, while a package-grouped list shows every file with
+// no lines to trace. The SVG is still one click away under Map.
+function renderMapList(host, data, level) {
   host.textContent = "";
-  const list = document.createElement("ul");
-  list.className = "map-list";
+  const groups = new Map();
   for (const node of data.nodes) {
-    const item = document.createElement("li");
-    const target = resolveMapTarget(node.key);
-    const files = `${node.files} file${node.files === 1 ? "" : "s"}`;
-    const label = node.symbols ? `${files}, ${node.symbols} sym` : files;
-    if (target) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "map-list-item";
-      button.dataset.path = target;
-      button.textContent = `${node.key} \u2014 ${label}`;
-      attachMapActivation(button, target);
-      item.append(button);
+    const key = node.key;
+    let group = ".";
+    if (level === "package") {
+      const cut = key.indexOf("/");
+      group = cut === -1 ? key : key.slice(0, cut);
     } else {
-      const plain = document.createElement("span");
-      plain.className = "map-list-item static";
-      plain.textContent = `${node.key} \u2014 ${label}`;
-      item.append(plain);
+      const cut = key.lastIndexOf("/");
+      group = cut === -1 ? "." : key.slice(0, cut);
     }
-    list.append(item);
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push(node);
   }
-  host.append(list);
+
+  for (const group of [...groups.keys()].sort()) {
+    const members = groups.get(group).sort((a, b) => a.key.localeCompare(b.key));
+    const section = document.createElement("section");
+    section.className = "map-group";
+    const heading = document.createElement("h3");
+    heading.className = "map-group-title mono";
+    const label = document.createElement("span");
+    label.textContent = group;
+    const count = document.createElement("span");
+    count.className = "map-group-count mono";
+    count.textContent = `${members.length}`;
+    heading.append(label, count);
+    const list = document.createElement("ul");
+    list.className = "map-list";
+    for (const node of members) {
+      const item = document.createElement("li");
+      const target = resolveMapTarget(node.key);
+      const files = `${node.files} file${node.files === 1 ? "" : "s"}`;
+      const labelText = node.symbols ? `${files}, ${node.symbols} sym` : files;
+      if (target) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "map-list-item";
+        button.dataset.path = target;
+        const name = document.createElement("span");
+        name.className = "map-list-name mono";
+        name.textContent = node.key;
+        const sub = document.createElement("span");
+        sub.className = "map-list-sub mono";
+        sub.textContent = labelText;
+        button.append(name, sub);
+        attachMapActivation(button, target);
+        item.append(button);
+      } else {
+        const plain = document.createElement("span");
+        plain.className = "map-list-item static";
+        plain.textContent = `${node.key} \u2014 ${labelText}`;
+        item.append(plain);
+      }
+      list.append(item);
+    }
+    section.append(heading, list);
+    host.append(section);
+  }
   return data.nodes.length;
 }
 
@@ -908,26 +1513,46 @@ async function loadGraph(level) {
   state.mapLevel = level;
   const host = $("graph");
   host.setAttribute("aria-busy", "true");
-  host.innerHTML = '<div class="empty">Loading module graph...</div>';
+  host.textContent = "";
+  const loading = stateBlock("loading", "loading modules", "Building the import view from the index...");
+  host.append(loading.el);
   $("graph-meta").textContent = "";
+  clearMapFocus();
   try {
     const limit = level === "file" ? 40 : 24;
     const data = await api(`/api/map?level=${encodeURIComponent(level)}&limit=${limit}`);
     const nodes = data.nodes || [];
     const edges = data.edges || [];
+    const moduleCount = $("module-count");
+    if (moduleCount) moduleCount.textContent = String(nodes.length);
     if (nodes.length === 0) {
-      host.innerHTML = '<div class="empty">No internal imports in this view.</div>';
+      host.textContent = "";
+      const empty = stateBlock(
+        "empty",
+        "no imports in this view",
+        "Switch between File and Package, or index a repository that imports its own files.",
+        { icon: "0" },
+      );
+      host.append(empty.el);
       $("graph-meta").textContent = "0 nodes / 0 edges";
-      setGraphHelp("Nothing to draw. Switch view or index a repository with imports.");
+      setGraphHelp("Nothing to draw here.", "Switch view or index imports.");
       return;
     }
     let shown;
     try {
-      shown = renderMapSvg(host, data);
-      setGraphHelp("Click a box to open its file. Tab to a box, then press Enter.");
+      if (state.mapView === "map") {
+        shown = renderMapSvg(host, data);
+        setGraphHelp(
+          "Hover or focus a box to isolate its links. Enter opens the file.",
+          "Expand for the full map \u00b7 Esc restores it",
+        );
+      } else {
+        shown = renderMapList(host, data, level);
+        setGraphHelp("List grouped by package. Click a file to open it.", "Switch to Map for imports");
+      }
     } catch (renderError) {
-      shown = renderMapList(host, data);
-      setGraphHelp("List view. Activate an entry to open its file.");
+      shown = renderMapList(host, data, level);
+      setGraphHelp("List view. Activate an entry to open its file.", "Switch to Map for imports");
     }
     window.requestAnimationFrame(scrollGraphToStart);
     $("graph-meta").textContent = [
@@ -936,7 +1561,9 @@ async function loadGraph(level) {
       data.omitted ? `${data.omitted} omitted` : "",
     ].filter(Boolean).join(" / ");
   } catch (err) {
-    host.innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
+    host.textContent = "";
+    const failed = stateBlock("error", "graph unavailable", err.message, { icon: "!" });
+    host.append(failed.el);
     $("graph-meta").textContent = "graph unavailable";
     status(`graph: ${err.message}`, true);
   } finally {
@@ -947,12 +1574,6 @@ async function loadGraph(level) {
 function setGraphExpanded(expanded) {
   const pane = $("graph-pane");
   pane.classList.toggle("maximized", expanded);
-  const collapse = $("graph-collapse");
-  if (expanded) {
-    pane.classList.remove("minimized");
-    collapse.setAttribute("aria-expanded", "true");
-    setButtonLabel(collapse, "Hide", "Hide module map");
-  }
   const button = $("graph-expand");
   button.setAttribute("aria-pressed", String(expanded));
   setButtonLabel(
@@ -960,21 +1581,30 @@ function setGraphExpanded(expanded) {
     expanded ? "Restore" : "Expand",
     expanded ? "Restore module map" : "Expand module map",
   );
+  const backdrop = $("map-backdrop");
+  if (backdrop) backdrop.hidden = !expanded;
+  if (!expanded) clearMapFocus();
   window.requestAnimationFrame(scrollGraphToStart);
 }
 
-function setGraphMinimized(minimized) {
-  const pane = $("graph-pane");
-  if (minimized) setGraphExpanded(false);
-  pane.classList.toggle("minimized", minimized);
-  const button = $("graph-collapse");
-  button.setAttribute("aria-expanded", String(!minimized));
-  setButtonLabel(
-    button,
-    minimized ? "Show" : "Hide",
-    minimized ? "Show module map" : "Hide module map",
-  );
-  if (!minimized) window.requestAnimationFrame(scrollGraphToStart);
+function setMapView(view) {
+  state.mapView = view === "map" ? "map" : "list";
+  const tabs = [...document.querySelectorAll("#map-view button")];
+  const selected = Math.max(0, tabs.findIndex((button) => button.dataset.view === state.mapView));
+  tabs.forEach((button, index) => {
+    const active = index === selected;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+  });
+  $("graph").setAttribute("aria-labelledby", tabs[selected].id);
+  loadGraph(state.mapLevel);
+  // The dock is narrower than an import graph. Map opens the focus layer, so
+  // the 32-node drawing is readable instead of one clipped column.
+  if (state.mapView === "map" && $("graph").clientWidth < 520) {
+    setGraphExpanded(true);
+    status("module map expanded - Esc restores it");
+  }
 }
 
 function setMapLevel(level) {
@@ -988,6 +1618,49 @@ function setMapLevel(level) {
   });
   $("graph").setAttribute("aria-labelledby", tabs[selected].id);
   loadGraph(tabs[selected].dataset.level);
+}
+
+// -- work tabs ---------------------------------------------------------
+// Editor and Ask share the middle pane; Modules, citations, and model state
+// stay visible on the right. A question never hides the code it cites.
+
+function setWorkTab(name, options) {
+  const tab = name === "ask" ? "ask" : "editor";
+  const editorTab = $("work-tab-editor");
+  const askTab = $("work-tab-ask");
+  const editorPanel = $("work-editor");
+  const askPanel = $("work-ask");
+  if (!editorTab || !askTab || !editorPanel || !askPanel) return;
+  state.workTab = tab;
+  const entries = [
+    { button: editorTab, panel: editorPanel, active: tab === "editor" },
+    { button: askTab, panel: askPanel, active: tab === "ask" },
+  ];
+  for (const entry of entries) {
+    entry.button.classList.toggle("active", entry.active);
+    entry.button.setAttribute("aria-selected", String(entry.active));
+    entry.button.tabIndex = entry.active ? 0 : -1;
+    entry.panel.hidden = !entry.active;
+  }
+  if (tab === "ask" && options && options.focus) $("ask-input").focus();
+}
+
+function initWorkTabs() {
+  const tabs = [$("work-tab-editor"), $("work-tab-ask")];
+  if (tabs.some((tab) => !tab)) return;
+  tabs.forEach((button, index) => {
+    button.addEventListener("click", () => setWorkTab(index === 0 ? "editor" : "ask"));
+    button.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      let next;
+      if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = tabs.length - 1;
+      else next = (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      setWorkTab(next === 0 ? "editor" : "ask");
+      tabs[next].focus();
+    });
+  });
 }
 
 // -- guide -------------------------------------------------------------
@@ -1058,48 +1731,169 @@ function initExamples() {
 
 function initShortcuts() {
   document.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape" || event.defaultPrevented) return;
+    const active = document.activeElement;
+    const tag = active && active.tagName;
+    const typing = tag === "INPUT" || tag === "TEXTAREA" || (active && active.isContentEditable);
     const dialog = $("help-dialog");
+
+    if (event.key === "/" && !event.defaultPrevented) {
+      if (typing || (dialog && dialog.open)) return;
+      event.preventDefault();
+      const search = $("find-input");
+      search.focus();
+      search.select();
+      return;
+    }
+
+    if (event.key === "?" && !event.defaultPrevented) {
+      if (typing || (dialog && dialog.open)) return;
+      event.preventDefault();
+      openHelp(active);
+      return;
+    }
+
+    if (event.key === "f" && (event.ctrlKey || event.metaKey) && state.activePath) {
+      event.preventDefault();
+      setEditorFindOpen(true);
+      return;
+    }
+
+    if (event.key !== "Escape" || event.defaultPrevented) return;
     if (dialog && dialog.open) return;
+    if (state.findOpen) {
+      setEditorFindOpen(false);
+      status("find closed");
+      return;
+    }
     const pane = $("graph-pane");
     if (pane && pane.classList.contains("maximized")) {
       setGraphExpanded(false);
       status("module map restored");
+      return;
+    }
+    if (!$("find-results").hidden) {
+      hideFindResults();
+      $("find-input").focus();
     }
   });
 }
 
 // -- init --------------------------------------------------------------
 
-async function init() {
-  initHelp();
-  initExamples();
-  initShortcuts();
+function initEditorControls() {
+  const toggle = $("editor-find-toggle");
+  toggle.addEventListener("click", () => setEditorFindOpen(!state.findOpen));
+
+  const input = $("editor-find-input");
+  input.addEventListener("input", () => applyEditorFind(input.value));
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      stepEditorFind(event.shiftKey ? -1 : 1);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      setEditorFindOpen(false);
+      status("find closed");
+    }
+  });
+  $("editor-find-next").addEventListener("click", () => stepEditorFind(1));
+  $("editor-find-prev").addEventListener("click", () => stepEditorFind(-1));
+  $("editor-find-close").addEventListener("click", () => {
+    setEditorFindOpen(false);
+    status("find closed");
+  });
+}
+
+function initSearch() {
+  $("find-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    window.clearTimeout(findTimer);
+    runFind($("find-input").value);
+  });
+  $("find-input").addEventListener("input", () => {
+    window.clearTimeout(findTimer);
+    findTimer = window.setTimeout(() => runFind($("find-input").value), 220);
+  });
+  $("find-input").addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" && !$("find-results").hidden) {
+      event.preventDefault();
+      focusFindRow(1);
+      return;
+    }
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    if ($("find-input").value) {
+      $("find-input").value = "";
+      runFind("");
+      status("search cleared");
+    } else {
+      hideFindResults();
+      $("find-input").blur();
+    }
+  });
+  $("find-results").addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      focusFindRow(event.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      hideFindResults();
+      $("find-input").focus();
+    }
+  });
+  $("find-results").addEventListener("click", (event) => {
+    const ask = event.target.closest("[data-ask]");
+    if (ask) {
+      askFromSearch();
+      return;
+    }
+    const row = event.target.closest("[data-path]");
+    if (!row) return;
+    const start = Number(row.dataset.start || 0) || null;
+    const end = Number(row.dataset.end || 0) || null;
+    hideFindResults();
+    openFile(row.dataset.path, start, end);
+  });
+  $("ask-from-search").addEventListener("click", askFromSearch);
+  $("empty-focus-search").addEventListener("click", () => {
+    const search = $("find-input");
+    search.focus();
+    search.select();
+  });
+}
+
+function initTreeFilter() {
+  $("tree-filter").addEventListener("input", scheduleTreeFilter);
+  $("tree-filter").addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !$("tree-filter").value) return;
+    event.preventDefault();
+    event.stopPropagation();
+    clearTreeFilter();
+    status("filter cleared");
+  });
+  $("tree-filter-clear").addEventListener("click", () => {
+    clearTreeFilter();
+    status("filter cleared");
+  });
+}
+
+function initGraphControls() {
   setButtonLabel($("graph-expand"), "Expand", "Expand module map");
-  setButtonLabel($("graph-collapse"), "Hide", "Hide module map");
   $("graph-expand").addEventListener("click", () => {
     const expanded = !$("graph-pane").classList.contains("maximized");
     setGraphExpanded(expanded);
     status(expanded ? "module map expanded - Esc restores it" : "module map restored");
   });
-  $("graph-collapse").addEventListener("click", () => {
-    const minimized = !$("graph-pane").classList.contains("minimized");
-    setGraphMinimized(minimized);
-    status(minimized ? "module map hidden" : "module map shown");
+  $("map-backdrop").addEventListener("click", () => {
+    setGraphExpanded(false);
+    status("module map restored");
   });
-  $("ask-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const question = $("ask-input").value.trim();
-    if (question) ask(question);
-  });
-  $("tree-filter").addEventListener("input", scheduleTreeFilter);
-  $("tree-filter").addEventListener("keydown", (event) => {
-    if (event.key !== "Escape" || !$("tree-filter").value) return;
-    event.preventDefault();
-    $("tree-filter").value = "";
-    applyTreeFilter();
-    status("filter cleared");
-  });
+
   const levelTabs = [...document.querySelectorAll("#map-level button")];
   levelTabs.forEach((button, index) => {
     button.addEventListener("click", () => setMapLevel(button.dataset.level));
@@ -1112,7 +1906,45 @@ async function init() {
       levelTabs[next].focus();
     });
   });
+  const viewTabs = [...document.querySelectorAll("#map-view button")];
+  viewTabs.forEach((button, index) => {
+    button.addEventListener("click", () => setMapView(button.dataset.view));
+    button.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const step = event.key === "ArrowRight" ? 1 : -1;
+      const next = (index + step + viewTabs.length) % viewTabs.length;
+      setMapView(viewTabs[next].dataset.view);
+      viewTabs[next].focus();
+    });
+  });
+}
+
+async function init() {
+  initHelp();
+  initExamples();
+  initShortcuts();
+  initWorkTabs();
+  initEditorControls();
+  initSearch();
+  initTreeFilter();
+  initGraphControls();
+
+  $("ask-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const question = $("ask-input").value.trim();
+    if (question) ask(question);
+  });
+  $("explain-file").addEventListener("click", () => explainFile());
   $("answer").addEventListener("click", (event) => {
+    const target = event.target.closest("[data-path]");
+    if (!target) return;
+    event.preventDefault();
+    const start = Number(target.dataset.start || 0) || null;
+    const end = Number(target.dataset.end || 0) || null;
+    openFile(target.dataset.path, start, end);
+  });
+  $("chunks").addEventListener("click", (event) => {
     const target = event.target.closest("[data-path]");
     if (!target) return;
     event.preventDefault();
@@ -1132,8 +1964,12 @@ async function init() {
     setMapLevel(meta.mapLevel || "file");
   } catch (err) {
     status(err.message, true);
-    $("tree").innerHTML = `<div class="empty error">${escapeHtml(err.message)}</div>`;
-    $("graph").innerHTML = `<div class="empty error">${escapeHtml(err.message)}</div>`;
+    const treeError = stateBlock("error", "index unavailable", err.message, { icon: "!" });
+    $("tree").textContent = "";
+    $("tree").append(treeError.el);
+    const graphError = stateBlock("error", "index unavailable", err.message, { icon: "!" });
+    $("graph").textContent = "";
+    $("graph").append(graphError.el);
   }
 }
 

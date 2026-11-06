@@ -101,9 +101,16 @@ frontend framework.
 
 - **Files** - the tree comes from the index. Clicking a file opens it with line
   numbers.
-- **Ask** - the box calls the same `retrieve`, `answer`, and
-  `validate_citations` functions as `atlas ask`, so the answer, the
-  `[invalid citation removed]` handling, and the refusal are identical.
+- **Find** - the field in the code header searches symbols and content through
+  the same retrieval index and returns `path:line` rows in milliseconds. It
+  never calls the model, so it is the "where is X?" path.
+- **Explain this file** - the button in the code header asks about the open file
+  only. Retrieval is limited to that file's chunks, and the answer, validated
+  citations, click-through, and session cache work exactly like repo-wide Ask.
+- **Ask the repo** - the box calls the same `retrieve`, `answer`, and
+  `validate_citations` functions as `atlas ask` over the whole repository, so
+  the answer, the `[invalid citation removed]` handling, and the refusal are
+  identical. Doing this did not change; file scope is an extra path.
 - **Modules** - the `atlas map` graph drawn as native SVG from `/api/map`, file
   level by default and package level on demand, with node and edge counts and a
   clickable box per file. No third-party script and no CDN, so it renders
@@ -111,7 +118,9 @@ frontend framework.
 - **Citations** - every `path:line` / `path:start-end` is clickable and opens
   that file, scrolls to the line, and highlights the range.
 - **Guide** - the first visit opens a four-step beginner guide, also reachable
-  from **How it works**; example question chips fill the ask box.
+  from **How it works**: find a file, press **Explain this file**, use
+  **Ask the repo** for cross-file questions, then follow a citation. Example
+  question chips fill the ask box.
 - **Speed** - the file filter is debounced, repeated questions render from a
   browser-session cache, and the answer meta shows how long the answer took.
   `ATLAS_KEEP_ALIVE` keeps the model warm between questions and
